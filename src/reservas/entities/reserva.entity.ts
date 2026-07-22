@@ -20,7 +20,7 @@ export class Reserva {
   @PrimaryGeneratedColumn({ name: 'Id' })
   id: number;
 
-  @Column({ type: 'nvarchar', length: 50, name: 'Codigo' })
+  @Column({ type: 'uniqueidentifier', name: 'Codigo' })
   codigo: string;
 
   @Column({ type: 'date', name: 'Fecha' })

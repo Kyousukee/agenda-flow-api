@@ -19,9 +19,9 @@ export class BloqueosService {
     private readonly empleadoRepo: Repository<Empleado>,
   ) {}
 
-  async findAllByEmpresa(empresaId: number) {
+  async findAllBySucursal(sucursalId: number) {
     return this.bloqueoRepo.find({
-      where: { empleado: { sucursal: { empresa: { id: empresaId } } } },
+      where: { empleado: { sucursal: { id: sucursalId } } },
       relations: { empleado: true },
       order: { id: 'ASC' },
     });

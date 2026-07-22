@@ -22,10 +22,10 @@ export class EmpleadosService {
     private readonly servicioEmpleadoRepo: Repository<ServicioEmpleado>,
   ) {}
 
-  async findAllByEmpresa(empresaId: number) {
+  async findAllBySucursal(sucursalId: number) {
     return this.empleadoRepo.find({
-      where: { sucursal: { empresa: { id: empresaId } } },
-      relations: { sucursal: true, serviciosEmpleados: { servicio: true } },
+      where: { sucursal: { id: sucursalId } },
+      relations: { serviciosEmpleados: { servicio: true } },
       order: { id: 'ASC' },
     });
   }

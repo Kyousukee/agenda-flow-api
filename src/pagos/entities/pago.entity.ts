@@ -2,16 +2,19 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  CreateDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
 import { Reserva } from '../../reservas/entities/reserva.entity';
+import { Estado } from '../../reservas/entities/estado.entity';
 
-@Entity('pagos')
+@Entity('Pago')
 export class Pago {
-  @PrimaryGeneratedColumn()
+  @PrimaryGeneratedColumn({ name: 'Id' })
   id: number;
+
+  @Column({ type: 'int', name: 'ReservaId' })
+  reserva_id: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, name: 'Monto' })
   monto: number;
@@ -19,13 +22,17 @@ export class Pago {
   @Column({ type: 'nvarchar', length: 50, nullable: true, name: 'MetodoPago' })
   metodoPago?: string;
 
+  @Column({ type: 'nvarchar', length: 100, nullable: true, name: 'CodigoTransaccion' })
+  codigoTransaccion?: string;
+
   @Column({ type: 'datetime2', name: 'FechaPago' })
   fechaPago: Date;
-
-  @CreateDateColumn({ type: 'datetime2', name: 'FechaCreacion' })
-  fechaCreacion: Date;
 
   @ManyToOne(() => Reserva, (reserva) => reserva.pagos)
   @JoinColumn({ name: 'ReservaId' })
   reserva: Reserva;
+
+  @ManyToOne(() => Estado)
+  @JoinColumn({ name: 'EstadoId' })
+  estado: Estado;
 }

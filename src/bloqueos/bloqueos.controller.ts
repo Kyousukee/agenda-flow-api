@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   ParseIntPipe,
   UseGuards,
   HttpCode,
@@ -27,8 +28,8 @@ export class BloqueosController {
   constructor(private readonly bloqueosService: BloqueosService) {}
 
   @Get()
-  findAll(@Req() req: { user?: JwtPayload }) {
-    return this.bloqueosService.findAllByEmpresa(req.user!.empresaId);
+  findAll(@Query('sucursalId', ParseIntPipe) sucursalId: number) {
+    return this.bloqueosService.findAllBySucursal(sucursalId);
   }
 
   @Post()

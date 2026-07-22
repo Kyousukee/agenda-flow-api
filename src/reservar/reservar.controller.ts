@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   ParseIntPipe,
@@ -10,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ReservarService } from './reservar.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
+import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
 @Controller('reservar')
 export class ReservarController {
@@ -45,6 +47,13 @@ export class ReservarController {
     return this.reservarService.getBloqueosBySucursal(sucursalId);
   }
 
+  @Get('reservas/:sucursalId')
+  getReservasBySucursal(
+    @Param('sucursalId', ParseIntPipe) sucursalId: number,
+  ) {
+    return this.reservarService.getReservasBySucursal(sucursalId);
+  }
+
   @Get('servicios-empleados/:sucursalId')
   getServiciosEmpleados(
     @Param('sucursalId', ParseIntPipe) sucursalId: number,
@@ -56,5 +65,13 @@ export class ReservarController {
   @HttpCode(HttpStatus.CREATED)
   createReserva(@Body() dto: CreateReservaDto) {
     return this.reservarService.createReserva(dto);
+  }
+
+  @Patch('reservas/:id/estado')
+  actualizarEstadoReserva(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateReservaEstadoDto,
+  ) {
+    return this.reservarService.actualizarEstadoReserva(id, dto);
   }
 }

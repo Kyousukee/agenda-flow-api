@@ -3,4 +3,5 @@ export interface JwtPayload {
   email: string;
   rolId: number;
   empresaId: number;
+  sucursalId?: number;
 }

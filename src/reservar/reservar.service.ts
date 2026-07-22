@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { v4 as uuidv4 } from 'uuid';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
@@ -12,6 +13,7 @@ import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-emple
 import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { CreateReservaDto } from './dto/create-reserva.dto';
+import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
 @Injectable()
 export class ReservarService {
@@ -68,10 +70,13 @@ export class ReservarService {
   }
 
   async getEmpleadosBySucursal(sucursalId: number) {
-    return this.empleadoRepo.find({
-      where: { sucursal: { id: sucursalId }, activo: true },
-      order: { nombre: 'ASC' },
-    });
+    return this.empleadoRepo
+      .createQueryBuilder('empleado')
+      .innerJoin('empleado.sucursal', 'sucursal')
+      .where('sucursal.id = :sucursalId', { sucursalId })
+      .andWhere('empleado.activo = :activo', { activo: true })
+      .orderBy('empleado.nombre', 'ASC')
+      .getMany();
   }
 
   async getHorariosBySucursal(sucursalId: number) {
@@ -96,12 +101,20 @@ export class ReservarService {
     });
   }
 
+  async getReservasBySucursal(sucursalId: number) {
+    return this.reservaRepo.find({
+      where: { sucursal: { id: sucursalId } },
+      relations: { cliente: true, empleado: true, servicio: true, estado: true, sucursal: true, pagos: true },
+      order: { fecha: 'DESC', horaInicio: 'ASC' },
+    });
+  }
+
   async createReserva(dto: CreateReservaDto) {
     let cliente: Cliente | null = null;
 
     if (dto.clienteEmail) {
       cliente = await this.clienteRepo.findOne({
-        where: { email: dto.clienteEmail, empresa: { id: dto.empresaId } },
+        where: { email: dto.clienteEmail },
       });
     }
 
@@ -141,12 +154,22 @@ export class ReservarService {
     return this.reservaRepo.save(reserva);
   }
 
-  private generateCodigo(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = 'RES-';
-    for (let i = 0; i < 8; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
+  async actualizarEstadoReserva(id: number, dto: UpdateReservaEstadoDto) {
+    const reserva = await this.reservaRepo.findOne({ where: { id } });
+    if (!reserva) {
+      throw new NotFoundException('Reserva no encontrada');
     }
-    return result;
+
+    const estado = await this.estadoRepo.findOne({ where: { id: dto.estadoId } });
+    if (!estado) {
+      throw new NotFoundException('Estado no encontrado');
+    }
+
+    reserva.estado = estado;
+    return this.reservaRepo.save(reserva);
+  }
+
+  private generateCodigo(): string {
+    return uuidv4();
   }
 }

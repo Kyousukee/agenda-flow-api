@@ -97,6 +97,7 @@ export class AuthService {
         email: savedUsuario.email,
         rolId: 1,
         empresaId: savedEmpresa.id,
+        sucursalId: savedSucursal.id,
       };
       const accessToken = this.jwtService.sign(payload);
 
@@ -181,6 +182,7 @@ export class AuthService {
       email: user.email,
       rolId: user.rol?.id,
       empresaId: user.empresa?.id,
+      sucursalId: empleado?.sucursal?.id,
     };
 
     return {
