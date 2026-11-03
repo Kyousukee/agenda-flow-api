@@ -12,6 +12,7 @@ import { Bloqueo } from '../bloqueos/entities/bloqueo.entity';
 import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
+import { Empresa } from '../empresas/entities/empresa.entity';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
       ServicioEmpleado,
       Estado,
       EmpresaSlug,
+      Empresa,
     ]),
   ],
   controllers: [ReservarController],

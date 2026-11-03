@@ -12,6 +12,7 @@ import { Bloqueo } from '../bloqueos/entities/bloqueo.entity';
 import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
+import { Empresa } from '../empresas/entities/empresa.entity';
 import { CreateReservaDto } from './dto/create-reserva.dto';
 import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
@@ -38,9 +39,18 @@ export class ReservarService {
     private readonly estadoRepo: Repository<Estado>,
     @InjectRepository(EmpresaSlug)
     private readonly empresaSlugRepo: Repository<EmpresaSlug>,
+    @InjectRepository(Empresa)
+    private readonly empresaRepo: Repository<Empresa>,
   ) {}
 
   async getEmpresaBySlug(slug: string) {
+    // El slug principal vive en empresa.slug (se asigna al registrarse).
+    const empresa = await this.empresaRepo.findOne({ where: { slug } });
+    if (empresa) {
+      return empresa;
+    }
+
+    // Respaldo: slugs alternativos/históricos en la tabla EmpresaSlug.
     const empresaSlug = await this.empresaSlugRepo.findOne({
       where: { slug },
       relations: { empresa: true },
