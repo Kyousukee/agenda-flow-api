@@ -13,6 +13,8 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
+import { Suscripcion } from '../suscripciones/entities/suscripcion.entity';
+import { DIAS_PRUEBA } from '../suscripciones/planes';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 
@@ -63,6 +65,18 @@ export class AuthService {
       empresa.estadoId = estadoEmpresa.id;
       empresa.fechaCreacion = new Date();
       const savedEmpresa = await queryRunner.manager.save(empresa);
+
+      // SPEC 01: toda empresa nueva parte con la prueba de 14 días.
+      const inicioPrueba = new Date();
+      const suscripcion = new Suscripcion();
+      suscripcion.empresaId = savedEmpresa.id;
+      suscripcion.plan = 'Prueba';
+      suscripcion.fechaInicio = inicioPrueba;
+      suscripcion.fechaFin = new Date(
+        inicioPrueba.getTime() + DIAS_PRUEBA * 24 * 60 * 60 * 1000,
+      );
+      suscripcion.excedenteDesactivado = false;
+      await queryRunner.manager.save(suscripcion);
 
       const sucursal = new Sucursal();
       sucursal.empresa = savedEmpresa;

@@ -9,6 +9,7 @@ import { Sucursal } from './entities/sucursal.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { CreateSucursalDto } from './dto/create-sucursal.dto';
 import { UpdateSucursalDto } from './dto/update-sucursal.dto';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 
 @Injectable()
 export class SucursalesService {
@@ -17,6 +18,7 @@ export class SucursalesService {
     private readonly sucursalRepo: Repository<Sucursal>,
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
+    private readonly suscripcionesService: SuscripcionesService,
   ) {}
 
   async findAllByEmpresa(empresaId: number) {
@@ -32,6 +34,11 @@ export class SucursalesService {
     });
     if (!empresa) {
       throw new NotFoundException('Empresa no encontrada');
+    }
+
+    // SPEC 01: solo cuenta contra el límite si la nueva sucursal queda activa.
+    if (dto.activo ?? true) {
+      await this.suscripcionesService.validarLimite(empresaId, 'sucursales');
     }
 
     const sucursal = this.sucursalRepo.create({
@@ -52,6 +59,12 @@ export class SucursalesService {
   }
 
   async update(id: number, dto: UpdateSucursalDto, empresaId: number) {
+    // SPEC 01: resolver un posible vencimiento ANTES de leer el registro, para no
+    // reescribir con save() un 'activo' que la degradación acaba de apagar.
+    if (dto.activo === true) {
+      await this.suscripcionesService.obtenerVigente(empresaId);
+    }
+
     const sucursal = await this.sucursalRepo.findOne({
       where: { id },
       relations: { empresa: true },
@@ -64,6 +77,13 @@ export class SucursalesService {
         'No tienes permiso para modificar esta sucursal',
       );
     }
+
+    // SPEC 01: reactivar cuenta contra el límite del plan.
+    if (dto.activo === true && !sucursal.activo) {
+      await this.suscripcionesService.validarLimite(empresaId, 'sucursales');
+    }
+    // Un cambio manual de 'activo' quita la marca de "desactivado por suscripción".
+    const cambiaActivo = dto.activo !== undefined && dto.activo !== sucursal.activo;
 
     Object.assign(sucursal, {
       ...(dto.nombre !== undefined && { nombre: dto.nombre }),
@@ -80,6 +100,7 @@ export class SucursalesService {
       }),
       ...(dto.telefono !== undefined && { telefono: dto.telefono }),
       ...(dto.activo !== undefined && { activo: dto.activo }),
+      ...(cambiaActivo && { desactivadoPorSuscripcion: false }),
     });
 
     return this.sucursalRepo.save(sucursal);

@@ -13,6 +13,7 @@ import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-emple
 import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
+import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { Empresa } from '../empresas/entities/empresa.entity';
       EmpresaSlug,
       Empresa,
     ]),
+    SuscripcionesModule,
   ],
   controllers: [ReservarController],
   providers: [ReservarService],

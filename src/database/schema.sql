@@ -275,6 +275,35 @@ CREATE TABLE dbo.Pago (
 GO
 
 /* ---------------------------------------------------------------------
+   Suscripciones (SPEC 01 - ver migrations/001-suscripciones.sql)
+   --------------------------------------------------------------------- */
+
+IF OBJECT_ID(N'dbo.Suscripcion', N'U') IS NULL
+CREATE TABLE dbo.Suscripcion (
+    Id                     INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Suscripcion PRIMARY KEY,
+    EmpresaId              INT           NOT NULL CONSTRAINT UQ_Suscripcion_Empresa UNIQUE,
+    [Plan]                 NVARCHAR(20)  NOT NULL
+                           CONSTRAINT CK_Suscripcion_Plan CHECK ([Plan] IN (N'Prueba', N'Gratis', N'Pro')),
+    FechaInicio            DATETIME2     NOT NULL CONSTRAINT DF_Suscripcion_FechaInicio DEFAULT GETDATE(),
+    FechaFin               DATETIME2     NULL,   -- NULL + Pro = sin vencimiento; NULL + Gratis = indefinido
+    ExcedenteDesactivado   BIT           NOT NULL CONSTRAINT DF_Suscripcion_Excedente DEFAULT 0,
+    FechaActualizacion     DATETIME2     NULL     CONSTRAINT DF_Suscripcion_FechaAct DEFAULT GETDATE(),
+    CONSTRAINT FK_Suscripcion_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id)
+);
+GO
+
+IF COL_LENGTH('dbo.Sucursal', 'DesactivadoPorSuscripcion') IS NULL
+    ALTER TABLE dbo.Sucursal ADD DesactivadoPorSuscripcion BIT NOT NULL
+        CONSTRAINT DF_Sucursal_DesactSusc DEFAULT 0;
+IF COL_LENGTH('dbo.Empleado', 'DesactivadoPorSuscripcion') IS NULL
+    ALTER TABLE dbo.Empleado ADD DesactivadoPorSuscripcion BIT NOT NULL
+        CONSTRAINT DF_Empleado_DesactSusc DEFAULT 0;
+IF COL_LENGTH('dbo.Servicio', 'DesactivadoPorSuscripcion') IS NULL
+    ALTER TABLE dbo.Servicio ADD DesactivadoPorSuscripcion BIT NOT NULL
+        CONSTRAINT DF_Servicio_DesactSusc DEFAULT 0;
+GO
+
+/* ---------------------------------------------------------------------
    Datos iniciales
    --------------------------------------------------------------------- */
 

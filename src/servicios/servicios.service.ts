@@ -9,6 +9,7 @@ import { Servicio } from './entities/servicio.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 
 @Injectable()
 export class ServiciosService {
@@ -17,6 +18,7 @@ export class ServiciosService {
     private readonly servicioRepo: Repository<Servicio>,
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
+    private readonly suscripcionesService: SuscripcionesService,
   ) {}
 
   async findAllByEmpresa(empresaId: number) {
@@ -34,6 +36,11 @@ export class ServiciosService {
       throw new NotFoundException('Empresa no encontrada');
     }
 
+    // SPEC 01: solo cuenta contra el límite si el nuevo servicio queda activo.
+    if (dto.activo ?? true) {
+      await this.suscripcionesService.validarLimite(empresaId, 'servicios');
+    }
+
     const servicio = this.servicioRepo.create({
       nombre: dto.nombre,
       descripcion: dto.descripcion,
@@ -48,6 +55,12 @@ export class ServiciosService {
   }
 
   async update(id: number, dto: UpdateServicioDto, empresaId: number) {
+    // SPEC 01: resolver un posible vencimiento ANTES de leer el registro, para no
+    // reescribir con save() un 'activo' que la degradación acaba de apagar.
+    if (dto.activo === true) {
+      await this.suscripcionesService.obtenerVigente(empresaId);
+    }
+
     const servicio = await this.servicioRepo.findOne({
       where: { id },
       relations: { empresa: true },
@@ -61,6 +74,13 @@ export class ServiciosService {
       );
     }
 
+    // SPEC 01: reactivar cuenta contra el límite del plan.
+    if (dto.activo === true && !servicio.activo) {
+      await this.suscripcionesService.validarLimite(empresaId, 'servicios');
+    }
+    // Un cambio manual de 'activo' quita la marca de "desactivado por suscripción".
+    const cambiaActivo = dto.activo !== undefined && dto.activo !== servicio.activo;
+
     Object.assign(servicio, {
       ...(dto.nombre !== undefined && { nombre: dto.nombre }),
       ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
@@ -70,6 +90,7 @@ export class ServiciosService {
       ...(dto.precio !== undefined && { precio: dto.precio }),
       ...(dto.color !== undefined && { color: dto.color }),
       ...(dto.activo !== undefined && { activo: dto.activo }),
+      ...(cambiaActivo && { desactivadoPorSuscripcion: false }),
     });
 
     return this.servicioRepo.save(servicio);

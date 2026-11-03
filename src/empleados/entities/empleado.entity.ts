@@ -43,6 +43,9 @@ export class Empleado {
   @Column({ type: 'bit', default: true, nullable: true, name: 'Activo' })
   activo: boolean;
 
+  @Column({ type: 'bit', default: false, name: 'DesactivadoPorSuscripcion' })
+  desactivadoPorSuscripcion: boolean;
+
   @CreateDateColumn({ type: 'datetime2', name: 'FechaCreacion' })
   fechaCreacion: Date;
 

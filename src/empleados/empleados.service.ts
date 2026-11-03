@@ -10,6 +10,7 @@ import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-empleado.entity';
 import { CreateEmpleadoDto } from './dto/create-empleado.dto';
 import { UpdateEmpleadoDto } from './dto/update-empleado.dto';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 
 @Injectable()
 export class EmpleadosService {
@@ -20,6 +21,7 @@ export class EmpleadosService {
     private readonly sucursalRepo: Repository<Sucursal>,
     @InjectRepository(ServicioEmpleado)
     private readonly servicioEmpleadoRepo: Repository<ServicioEmpleado>,
+    private readonly suscripcionesService: SuscripcionesService,
   ) {}
 
   async findAllBySucursal(sucursalId: number) {
@@ -58,6 +60,11 @@ export class EmpleadosService {
       );
     }
 
+    // SPEC 01: solo cuenta contra el límite si el nuevo empleado queda activo.
+    if (dto.activo ?? true) {
+      await this.suscripcionesService.validarLimite(empresaId, 'empleados');
+    }
+
     const empleado = this.empleadoRepo.create({
       nombre: dto.nombre,
       apellido: dto.apellido,
@@ -85,6 +92,12 @@ export class EmpleadosService {
   }
 
   async update(id: number, dto: UpdateEmpleadoDto, empresaId: number) {
+    // SPEC 01: resolver un posible vencimiento ANTES de leer el registro, para no
+    // reescribir con save() un 'activo' que la degradación acaba de apagar.
+    if (dto.activo === true) {
+      await this.suscripcionesService.obtenerVigente(empresaId);
+    }
+
     const empleado = await this.empleadoRepo.findOne({
       where: { id },
       relations: { sucursal: { empresa: true } },
@@ -97,6 +110,13 @@ export class EmpleadosService {
         'No tienes permiso para modificar este empleado',
       );
     }
+
+    // SPEC 01: reactivar cuenta contra el límite del plan.
+    if (dto.activo === true && !empleado.activo) {
+      await this.suscripcionesService.validarLimite(empresaId, 'empleados');
+    }
+    // Un cambio manual de 'activo' quita la marca de "desactivado por suscripción".
+    const cambiaActivo = dto.activo !== undefined && dto.activo !== empleado.activo;
 
     if (dto.sucursalId !== undefined) {
       const nuevaSucursal = await this.sucursalRepo.findOne({
@@ -122,6 +142,7 @@ export class EmpleadosService {
       ...(dto.foto !== undefined && { foto: dto.foto }),
       ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
       ...(dto.activo !== undefined && { activo: dto.activo }),
+      ...(cambiaActivo && { desactivadoPorSuscripcion: false }),
     });
 
     await this.empleadoRepo.save(empleado);

@@ -5,9 +5,14 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { ServiciosController } from './servicios.controller';
 import { ServiciosService } from './servicios.service';
 import { AuthModule } from '../auth/auth.module';
+import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Servicio, Empresa]), AuthModule],
+  imports: [
+    TypeOrmModule.forFeature([Servicio, Empresa]),
+    AuthModule,
+    SuscripcionesModule,
+  ],
   controllers: [ServiciosController],
   providers: [ServiciosService],
 })
