@@ -129,7 +129,7 @@ export class ReservarService {
     }
 
     const estadoProgramada = await this.estadoRepo.findOne({
-      where: { nombre: 'Programada' },
+      where: { tipo: 'Reserva', nombre: 'Programada' },
     });
 
     const codigo = this.generateCodigo();

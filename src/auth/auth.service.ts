@@ -5,13 +5,14 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
+import { Estado } from '../reservas/entities/estado.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 
@@ -42,13 +43,24 @@ export class AuthService {
     await queryRunner.startTransaction();
 
     try {
+      const estadoEmpresa = await this.findEstado(
+        queryRunner.manager,
+        'Empresa',
+        'Activa',
+      );
+      const estadoUsuario = await this.findEstado(
+        queryRunner.manager,
+        'Usuario',
+        'Activo',
+      );
+
       const empresa = new Empresa();
       empresa.nombre = dto.empresaNombre;
       empresa.nombreComercial = dto.nombreComercial ?? undefined;
       empresa.slug = slug;
       empresa.email = dto.empresaEmail ?? undefined;
       empresa.telefono = dto.telefono ?? undefined;
-      empresa.estadoId = 1;
+      empresa.estadoId = estadoEmpresa.id;
       empresa.fechaCreacion = new Date();
       const savedEmpresa = await queryRunner.manager.save(empresa);
 
@@ -76,7 +88,7 @@ export class AuthService {
       usuario.telefono = dto.telefono ?? undefined;
       usuario.activo = true;
       usuario.rol = { id: 1 } as any;
-      usuario.estado = { id: 1 } as any;
+      usuario.estado = estadoUsuario;
       usuario.fechaCreacion = new Date();
       const savedUsuario = await queryRunner.manager.save(usuario);
 
@@ -152,6 +164,20 @@ export class AuthService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private async findEstado(
+    manager: EntityManager,
+    tipo: string,
+    nombre: string,
+  ): Promise<Estado> {
+    const estado = await manager.findOne(Estado, { where: { tipo, nombre } });
+    if (!estado) {
+      throw new InternalServerErrorException(
+        `No existe el estado '${nombre}' de tipo '${tipo}'`,
+      );
+    }
+    return estado;
   }
 
   async login(dto: LoginDto) {
