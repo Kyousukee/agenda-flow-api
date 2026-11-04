@@ -16,6 +16,7 @@ import { PagosModule } from './pagos/pagos.module';
 import { ConfiguracionEmpresaModule } from './configuracion-empresa/configuracion-empresa.module';
 import { ReservarModule } from './reservar/reservar.module';
 import { AuthModule } from './auth/auth.module';
+import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { AuthModule } from './auth/auth.module';
     PagosModule,
     ConfiguracionEmpresaModule,
     ReservarModule,
+    SuscripcionesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

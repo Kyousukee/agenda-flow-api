@@ -18,10 +18,14 @@ import { Rol } from '../rol/entities/rol.entity';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const secret = config.get<string>('JWT_SECRET');
-        const expiresIn = config.get<number>('JWT_EXPIRATION', 86400);
+        // Las variables de .env llegan como string. jsonwebtoken interpreta un string
+        // numérico sin unidad como MILISEGUNDOS ("86400" = 86 s), así que se convierte
+        // a número (segundos). También acepta formatos con unidad: "7d", "12h".
+        const raw = String(config.get('JWT_EXPIRATION') ?? '7d').trim();
+        const expiresIn = /^\d+$/.test(raw) ? Number(raw) : raw;
         return {
           secret,
-          signOptions: { expiresIn },
+          signOptions: { expiresIn: expiresIn as any },
         };
       },
     }),

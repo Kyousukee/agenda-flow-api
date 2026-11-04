@@ -12,6 +12,8 @@ import { Bloqueo } from '../bloqueos/entities/bloqueo.entity';
 import { ServicioEmpleado } from '../servicios-empleados/entities/servicio-empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
+import { Empresa } from '../empresas/entities/empresa.entity';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
 import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
@@ -38,14 +40,34 @@ export class ReservarService {
     private readonly estadoRepo: Repository<Estado>,
     @InjectRepository(EmpresaSlug)
     private readonly empresaSlugRepo: Repository<EmpresaSlug>,
+    @InjectRepository(Empresa)
+    private readonly empresaRepo: Repository<Empresa>,
+    private readonly suscripcionesService: SuscripcionesService,
   ) {}
 
   async getEmpresaBySlug(slug: string) {
+    const empresa = await this.buscarEmpresaPorSlug(slug);
+
+    // SPEC 01: la carga de la página pública también resuelve la suscripción,
+    // así el excedente de una prueba vencida se oculta aunque el dueño no entre.
+    await this.suscripcionesService.obtenerVigente(empresa.id);
+
+    return empresa;
+  }
+
+  private async buscarEmpresaPorSlug(slug: string): Promise<Empresa> {
+    // El slug principal vive en empresa.slug (se asigna al registrarse).
+    const empresa = await this.empresaRepo.findOne({ where: { slug } });
+    if (empresa) {
+      return empresa;
+    }
+
+    // Respaldo: slugs alternativos/históricos en la tabla EmpresaSlug.
     const empresaSlug = await this.empresaSlugRepo.findOne({
       where: { slug },
       relations: { empresa: true },
     });
-    if (!empresaSlug) {
+    if (!empresaSlug?.empresa) {
       throw new NotFoundException('Empresa no encontrada para este slug');
     }
     return empresaSlug.empresa;
@@ -56,7 +78,8 @@ export class ReservarService {
       where: { id },
       relations: { empresa: true },
     });
-    if (!sucursal) {
+    // SPEC 01: una sucursal inactiva (p. ej. excedente del plan Gratis) no se publica.
+    if (!sucursal || sucursal.activo === false) {
       throw new NotFoundException('Sucursal no encontrada');
     }
     return sucursal;
@@ -129,7 +152,7 @@ export class ReservarService {
     }
 
     const estadoProgramada = await this.estadoRepo.findOne({
-      where: { nombre: 'Programada' },
+      where: { tipo: 'Reserva', nombre: 'Programada' },
     });
 
     const codigo = this.generateCodigo();
