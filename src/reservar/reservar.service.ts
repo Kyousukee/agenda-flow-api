@@ -14,6 +14,7 @@ import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
+import { ReservaCorreosService } from '../correos/reserva-correos.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
 import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
@@ -43,6 +44,7 @@ export class ReservarService {
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
     private readonly suscripcionesService: SuscripcionesService,
+    private readonly reservaCorreos: ReservaCorreosService,
   ) {}
 
   async getEmpresaBySlug(slug: string) {
@@ -174,11 +176,19 @@ export class ReservarService {
       estado: estadoProgramada ?? undefined,
     });
 
-    return this.reservaRepo.save(reserva);
+    const saved = await this.reservaRepo.save(reserva);
+
+    // SPEC 02: correos en segundo plano; un fallo de envío no afecta la reserva.
+    void this.reservaCorreos.notificarNuevaReserva(saved.id);
+
+    return saved;
   }
 
   async actualizarEstadoReserva(id: number, dto: UpdateReservaEstadoDto) {
-    const reserva = await this.reservaRepo.findOne({ where: { id } });
+    const reserva = await this.reservaRepo.findOne({
+      where: { id },
+      relations: { estado: true },
+    });
     if (!reserva) {
       throw new NotFoundException('Reserva no encontrada');
     }
@@ -188,8 +198,18 @@ export class ReservarService {
       throw new NotFoundException('Estado no encontrado');
     }
 
+    // SPEC 02: si el estado no cambia, no se guarda ni se notifica.
+    if (reserva.estado?.id === estado.id) {
+      return reserva;
+    }
+
     reserva.estado = estado;
-    return this.reservaRepo.save(reserva);
+    const saved = await this.reservaRepo.save(reserva);
+
+    // SPEC 02: correos en segundo plano; un fallo de envío no afecta el cambio.
+    void this.reservaCorreos.notificarCambioEstado(saved.id);
+
+    return saved;
   }
 
   private generateCodigo(): string {

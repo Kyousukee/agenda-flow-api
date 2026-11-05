@@ -14,6 +14,7 @@ import { Estado } from '../reservas/entities/estado.entity';
 import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
+import { CorreosModule } from '../correos/correos.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
       Empresa,
     ]),
     SuscripcionesModule,
+    CorreosModule,
   ],
   controllers: [ReservarController],
   providers: [ReservarService],
