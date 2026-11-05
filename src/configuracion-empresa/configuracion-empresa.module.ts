@@ -5,11 +5,13 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { ConfiguracionEmpresaController } from './configuracion-empresa.controller';
 import { ConfiguracionEmpresaService } from './configuracion-empresa.service';
 import { AuthModule } from '../auth/auth.module';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ConfiguracionEmpresa, Empresa]),
     AuthModule,
+    CloudinaryModule,
   ],
   controllers: [ConfiguracionEmpresaController],
   providers: [ConfiguracionEmpresaService],

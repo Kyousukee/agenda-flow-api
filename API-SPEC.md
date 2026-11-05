@@ -883,6 +883,28 @@ Response `200`:
 }
 ```
 
+#### Logo de la empresa
+
+| Método | Endpoint                       | Auth | Rol   | Descripción                  |
+|--------|--------------------------------|------|-------|------------------------------|
+| POST   | `/configuracion-empresa/logo`  | Si   | admin | Subir/reemplazar el logo     |
+| DELETE | `/configuracion-empresa/logo`  | Si   | admin | Eliminar el logo             |
+
+La empresa se toma del JWT. La imagen se guarda en Cloudinary y su URL en `Empresa.Logo`
+(la devuelve también `GET /reservar/empresa-slug/:slug`).
+
+**POST `/configuracion-empresa/logo`** — `multipart/form-data`, campo `logo`.
+PNG, JPG o WEBP, máx. 2 MB (se redimensiona a 512×512 como máximo). Cada subida reemplaza la anterior.
+
+Response `201`:
+```json
+{ "logo": "https://res.cloudinary.com/<cloud>/image/upload/v.../agendaflow/logos/empresa-1.png" }
+```
+
+Errores: `400` sin archivo / tipo no permitido / > 2 MB · `404` empresa no encontrada · `500` fallo de Cloudinary.
+
+**DELETE `/configuracion-empresa/logo`** — Response `204`.
+
 ---
 
 ## Date/Time Formats
