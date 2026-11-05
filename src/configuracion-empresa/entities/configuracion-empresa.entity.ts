@@ -15,10 +15,21 @@ export class ConfiguracionEmpresa {
   @Column({ type: 'bit', default: false, name: 'PermitePagoAnticipado' })
   permitePagoAnticipado: boolean;
 
-  @Column({ type: 'nvarchar', length: 50, nullable: true, name: 'TipoAnticipo' })
+  @Column({
+    type: 'nvarchar',
+    length: 50,
+    nullable: true,
+    name: 'TipoAnticipo',
+  })
   tipoAnticipo?: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'MontoAnticipo' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    name: 'MontoAnticipo',
+  })
   montoAnticipo: number;
 
   @Column({ type: 'int', default: 24, name: 'TiempoCancelacionHoras' })

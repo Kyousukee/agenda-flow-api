@@ -5,6 +5,9 @@ import { ConfiguracionEmpresa } from './entities/configuracion-empresa.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { CreateConfiguracionDto } from './dto/create-configuracion.dto';
 import { UpdateConfiguracionDto } from './dto/update-configuracion.dto';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+
+const LOGO_FOLDER = 'agendaflow/logos';
 
 @Injectable()
 export class ConfiguracionEmpresaService {
@@ -13,7 +16,41 @@ export class ConfiguracionEmpresaService {
     private readonly configRepo: Repository<ConfiguracionEmpresa>,
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
+
+  async uploadLogo(file: Express.Multer.File, empresaId: number) {
+    const empresa = await this.getEmpresa(empresaId);
+    const result = await this.cloudinaryService.uploadImage(
+      file,
+      LOGO_FOLDER,
+      `empresa-${empresaId}`,
+    );
+    empresa.logo = result.secure_url;
+    await this.empresaRepo.save(empresa);
+    return { logo: empresa.logo };
+  }
+
+  async deleteLogo(empresaId: number) {
+    const empresa = await this.getEmpresa(empresaId);
+    if (!empresa.logo) return;
+    await this.cloudinaryService.deleteImage(
+      `${LOGO_FOLDER}/empresa-${empresaId}`,
+    );
+    await this.empresaRepo.update(empresaId, {
+      logo: null as unknown as string,
+    });
+  }
+
+  private async getEmpresa(empresaId: number) {
+    const empresa = await this.empresaRepo.findOne({
+      where: { id: empresaId },
+    });
+    if (!empresa) {
+      throw new NotFoundException('Empresa no encontrada');
+    }
+    return empresa;
+  }
 
   async findByEmpresa(empresaId: number) {
     const config = await this.configRepo.findOne({
