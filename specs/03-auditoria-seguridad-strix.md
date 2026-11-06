@@ -12,7 +12,7 @@ Variables nuevas:
 
 | Variable | Valor | Si falta |
 |---|---|---|
-| `CORS_ORIGINS` | Orígenes del front, separados por coma | Solo se permite `http://localhost:4200` |
+| `CORS_ORIGINS` | En producción: `https://agendaflow.cl,https://www.agendaflow.cl` | Solo se permite `http://localhost:4200` |
 | `TRUST_PROXY` | Número de proxies delante de la API | Detrás de un proxy, todos los clientes comparten el mismo límite de peticiones |
 
 `JWT_SECRET` ahora es obligatorio: sin él, la API no arranca.
