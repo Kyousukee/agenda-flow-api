@@ -2,17 +2,20 @@ import {
   Controller,
   Get,
   Post,
-  Patch,
   Body,
   Param,
   ParseIntPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ReservarService } from './reservar.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
-import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
 
+/**
+ * API pública de la página de reservas: no exige sesión, así que no debe devolver
+ * datos de clientes ni modificar nada que no sea crear una reserva nueva.
+ */
 @Controller('reservar')
 export class ReservarController {
   constructor(private readonly reservarService: ReservarService) {}
@@ -47,31 +50,20 @@ export class ReservarController {
     return this.reservarService.getBloqueosBySucursal(sucursalId);
   }
 
-  @Get('reservas/:sucursalId')
-  getReservasBySucursal(
-    @Param('sucursalId', ParseIntPipe) sucursalId: number,
-  ) {
-    return this.reservarService.getReservasBySucursal(sucursalId);
+  @Get('ocupacion/:sucursalId')
+  getOcupacion(@Param('sucursalId', ParseIntPipe) sucursalId: number) {
+    return this.reservarService.getOcupacionBySucursal(sucursalId);
   }
 
   @Get('servicios-empleados/:sucursalId')
-  getServiciosEmpleados(
-    @Param('sucursalId', ParseIntPipe) sucursalId: number,
-  ) {
+  getServiciosEmpleados(@Param('sucursalId', ParseIntPipe) sucursalId: number) {
     return this.reservarService.getServiciosEmpleadosBySucursal(sucursalId);
   }
 
   @Post()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
   createReserva(@Body() dto: CreateReservaDto) {
     return this.reservarService.createReserva(dto);
-  }
-
-  @Patch('reservas/:id/estado')
-  actualizarEstadoReserva(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateReservaEstadoDto,
-  ) {
-    return this.reservarService.actualizarEstadoReserva(id, dto);
   }
 }

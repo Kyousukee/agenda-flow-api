@@ -29,8 +29,14 @@ export class HorariosController {
   constructor(private readonly horariosService: HorariosService) {}
 
   @Get('sucursales/:sucursalId/horarios')
-  findAllBySucursal(@Param('sucursalId', ParseIntPipe) sucursalId: number) {
-    return this.horariosService.findAllBySucursal(sucursalId);
+  findAllBySucursal(
+    @Param('sucursalId', ParseIntPipe) sucursalId: number,
+    @Req() req: { user?: JwtPayload },
+  ) {
+    return this.horariosService.findAllBySucursal(
+      sucursalId,
+      req.user!.empresaId,
+    );
   }
 
   @Post('sucursales/:sucursalId/horarios')

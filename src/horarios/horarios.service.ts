@@ -20,7 +20,8 @@ export class HorariosService {
     private readonly sucursalRepo: Repository<Sucursal>,
   ) {}
 
-  async findAllBySucursal(sucursalId: number) {
+  async findAllBySucursal(sucursalId: number, empresaId: number) {
+    await this.validateSucursalOwnership(sucursalId, empresaId);
     return this.horarioRepo.find({
       where: { sucursal: { id: sucursalId } },
       order: { diaSemana: 'ASC' },
@@ -139,7 +140,7 @@ export class HorariosService {
     }
     if (sucursal.empresa.id !== empresaId) {
       throw new ForbiddenException(
-        'No tienes permiso para modificar los horarios de esta sucursal',
+        'No tienes permiso sobre los horarios de esta sucursal',
       );
     }
     return sucursal;

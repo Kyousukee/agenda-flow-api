@@ -28,8 +28,14 @@ export class BloqueosController {
   constructor(private readonly bloqueosService: BloqueosService) {}
 
   @Get()
-  findAll(@Query('sucursalId', ParseIntPipe) sucursalId: number) {
-    return this.bloqueosService.findAllBySucursal(sucursalId);
+  findAll(
+    @Query('sucursalId', ParseIntPipe) sucursalId: number,
+    @Req() req: { user?: JwtPayload },
+  ) {
+    return this.bloqueosService.findAllBySucursal(
+      sucursalId,
+      req.user!.empresaId,
+    );
   }
 
   @Post()

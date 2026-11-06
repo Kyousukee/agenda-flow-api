@@ -1,11 +1,15 @@
 import {
-  IsString,
-  IsOptional,
-  IsNumber,
+  IsEmail,
+  IsISO8601,
   IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
   MaxLength,
 } from 'class-validator';
 
+// El precio y la hora de término no se reciben: el servidor los calcula desde el servicio.
 export class CreateReservaDto {
   @IsNumber()
   empresaId: number;
@@ -20,37 +24,34 @@ export class CreateReservaDto {
   @IsNumber()
   empleadoId?: number;
 
-  @IsString()
-  @IsNotEmpty()
+  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'fecha debe tener formato AAAA-MM-DD',
+  })
   fecha: string;
 
-  @IsString()
-  @IsNotEmpty()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, {
+    message: 'horaInicio debe tener formato HH:mm',
+  })
   horaInicio: string;
-
-  @IsString()
-  @IsNotEmpty()
-  horaFin: string;
-
-  @IsNumber()
-  precio: number;
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   observacion?: string;
 
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
+  @MaxLength(100)
   clienteNombre: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
+  @IsEmail()
+  @MaxLength(150)
   clienteEmail?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(50)
+  @MaxLength(20)
   clienteTelefono?: string;
 }
