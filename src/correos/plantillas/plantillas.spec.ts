@@ -11,6 +11,8 @@ import { reservaNuevaInterna } from './reserva-nueva-interna';
 import { estadoReservaCliente } from './estado-reserva-cliente';
 import { estadoReservaEmpleado } from './estado-reserva-empleado';
 import { textoEstado } from './textos-estado';
+import { verificarEmail } from './verificar-email';
+import { restablecerContrasena } from './restablecer-contrasena';
 
 const marca: MarcaEmpresa = {
   nombre: 'Barbería Central',
@@ -181,5 +183,67 @@ describe('textos-estado', () => {
     expect(textoEstado('En espera').titulo).toBe(
       'Tu reserva cambió a "En espera"',
     );
+  });
+});
+
+describe('correos de cuenta', () => {
+  const enlace = 'https://agendaflow.cl/ruta?token=abc123&x=1';
+  const plantillasCuenta = [
+    [
+      'verificarEmail',
+      verificarEmail,
+      'Verifica tu email en AgendaFlow',
+      '24 horas',
+    ],
+    [
+      'restablecerContrasena',
+      restablecerContrasena,
+      'Restablece tu contraseña de AgendaFlow',
+      '1 hora',
+    ],
+  ] as const;
+
+  describe.each(plantillasCuenta)('%s', (_n, plantilla, asunto, vigencia) => {
+    it('usa el asunto del spec', () => {
+      expect(plantilla({ nombre: 'Ana', enlace }).subject).toBe(asunto);
+    });
+
+    it('escapa el nombre en el HTML', () => {
+      const { html } = plantilla({ nombre: '<b>x</b>', enlace });
+      expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
+      expect(html).not.toContain('<b>x</b>');
+    });
+
+    it('incluye el enlace en el HTML y en el texto', () => {
+      const { html, text } = plantilla({ nombre: 'Ana', enlace });
+      expect(html).toContain(`href="${escapeHtml(enlace)}"`);
+      expect(text).toContain(enlace);
+    });
+
+    it('indica la vigencia y qué hacer si no fue el usuario', () => {
+      const { html, text } = plantilla({ nombre: 'Ana', enlace });
+      for (const contenido of [html, text]) {
+        expect(contenido).toContain(vigencia);
+        expect(contenido).toContain('Si no fuiste tú, ignora este correo');
+      }
+    });
+
+    it('usa el pie de AgendaFlow, sin repetir la marca', () => {
+      const { html, text } = plantilla({ nombre: 'Ana', enlace });
+      for (const contenido of [html, text]) {
+        expect(contenido).toContain('Este correo fue enviado por AgendaFlow.');
+        expect(contenido).not.toContain('a través de AgendaFlow');
+      }
+    });
+  });
+});
+
+describe('pie de los correos de reservas', () => {
+  it.each(plantillas)('%s conserva su pie original', (_nombre, plantilla) => {
+    const { html, text } = plantilla(marca, datosBase);
+    const pie =
+      'Este correo fue enviado por Barbería Central a través de AgendaFlow.';
+    expect(html).toContain(pie);
+    expect(text).toContain(pie);
   });
 });

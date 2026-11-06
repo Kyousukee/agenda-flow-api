@@ -14,6 +14,11 @@ GO
 USE AgendaFlowDB;
 GO
 
+-- Los índices filtrados exigen estas opciones, y sqlcmd trae QUOTED_IDENTIFIER en OFF.
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
 /* ---------------------------------------------------------------------
    Catálogos
    --------------------------------------------------------------------- */
@@ -225,10 +230,33 @@ CREATE TABLE dbo.Usuario (
     EmpresaId           INT            NULL,
     RolId               INT            NULL,
     EstadoId            INT            NULL,
+    EmailVerificado     BIT            NOT NULL CONSTRAINT DF_Usuario_EmailVerificado DEFAULT 0,
+    TokenVersion        INT            NOT NULL CONSTRAINT DF_Usuario_TokenVersion DEFAULT 0,
+    VerificacionTokenHash     NVARCHAR(64) NULL,
+    VerificacionExpira        DATETIME2    NULL,
+    VerificacionUltimoEnvio   DATETIME2    NULL,
+    VerificacionVentanaInicio DATETIME2    NULL,
+    VerificacionEnviosVentana INT          NOT NULL CONSTRAINT DF_Usuario_VerificacionEnvios DEFAULT 0,
+    ResetTokenHash            NVARCHAR(64) NULL,
+    ResetExpira               DATETIME2    NULL,
+    ResetUltimoEnvio          DATETIME2    NULL,
+    ResetVentanaInicio        DATETIME2    NULL,
+    ResetEnviosVentana        INT          NOT NULL CONSTRAINT DF_Usuario_ResetEnvios DEFAULT 0,
     CONSTRAINT FK_Usuario_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id),
     CONSTRAINT FK_Usuario_Rol     FOREIGN KEY (RolId)     REFERENCES dbo.Rol(id),
     CONSTRAINT FK_Usuario_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
 );
+GO
+
+-- Los endpoints públicos buscan por el hash de los tokens (SPEC 04)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Usuario_VerificacionTokenHash')
+CREATE INDEX IX_Usuario_VerificacionTokenHash
+    ON dbo.Usuario(VerificacionTokenHash) WHERE VerificacionTokenHash IS NOT NULL;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Usuario_ResetTokenHash')
+CREATE INDEX IX_Usuario_ResetTokenHash
+    ON dbo.Usuario(ResetTokenHash) WHERE ResetTokenHash IS NOT NULL;
 GO
 
 /* ---------------------------------------------------------------------

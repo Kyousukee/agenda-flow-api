@@ -34,6 +34,64 @@ export class Usuario {
   @Column({ type: 'bit', default: true, name: 'Activo' })
   activo: boolean;
 
+  @Column({ type: 'bit', default: false, name: 'EmailVerificado' })
+  emailVerificado: boolean;
+
+  /** Va en el JWT; sube en 1 al restablecer la contraseña y cierra las sesiones. */
+  @Column({ type: 'int', default: 0, name: 'TokenVersion' })
+  tokenVersion: number;
+
+  // SPEC 04: solo se guarda el hash del token. No se selecciona por defecto.
+  @Column({
+    type: 'nvarchar',
+    length: 64,
+    nullable: true,
+    select: false,
+    name: 'VerificacionTokenHash',
+  })
+  verificacionTokenHash?: string | null;
+
+  @Column({ type: 'datetime2', nullable: true, name: 'VerificacionExpira' })
+  verificacionExpira?: Date | null;
+
+  @Column({
+    type: 'datetime2',
+    nullable: true,
+    name: 'VerificacionUltimoEnvio',
+  })
+  verificacionUltimoEnvio?: Date | null;
+
+  @Column({
+    type: 'datetime2',
+    nullable: true,
+    name: 'VerificacionVentanaInicio',
+  })
+  verificacionVentanaInicio?: Date | null;
+
+  @Column({ type: 'int', default: 0, name: 'VerificacionEnviosVentana' })
+  verificacionEnviosVentana: number;
+
+  @Column({
+    type: 'nvarchar',
+    length: 64,
+    nullable: true,
+    select: false,
+    name: 'ResetTokenHash',
+  })
+  resetTokenHash?: string | null;
+
+  @Column({ type: 'datetime2', nullable: true, name: 'ResetExpira' })
+  resetExpira?: Date | null;
+
+  @Column({ type: 'datetime2', nullable: true, name: 'ResetUltimoEnvio' })
+  resetUltimoEnvio?: Date | null;
+
+  @Column({ type: 'datetime2', nullable: true, name: 'ResetVentanaInicio' })
+  resetVentanaInicio?: Date | null;
+
+  @Column({ type: 'int', default: 0, name: 'ResetEnviosVentana' })
+  resetEnviosVentana: number;
+
   @CreateDateColumn({ type: 'datetime2', name: 'FechaCreacion' })
   fechaCreacion: Date;
 

@@ -18,8 +18,10 @@ import { Empleado } from '../empleados/entities/empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
 import { Suscripcion } from '../suscripciones/entities/suscripcion.entity';
 import { DIAS_PRUEBA } from '../suscripciones/planes';
+import { CuentaCorreosService } from '../correos/cuenta-correos.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { VIGENCIA_VERIFICACION_MS, generarToken } from './token-cuenta';
 
 @Injectable()
 export class AuthService {
@@ -32,6 +34,7 @@ export class AuthService {
     private readonly empleadoRepo: Repository<Empleado>,
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
+    private readonly cuentaCorreos: CuentaCorreosService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -44,6 +47,7 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const slug = await this.generateUniqueSlug(dto.empresaNombre);
+    const tokenVerificacion = generarToken();
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -109,6 +113,17 @@ export class AuthService {
       usuario.rol = { id: 1 } as any;
       usuario.estado = estadoUsuario;
       usuario.fechaCreacion = new Date();
+      // SPEC 04: se guarda solo el hash. Este correo cuenta como el primer envío.
+      const ahora = new Date();
+      usuario.emailVerificado = false;
+      usuario.tokenVersion = 0;
+      usuario.verificacionTokenHash = tokenVerificacion.hash;
+      usuario.verificacionExpira = new Date(
+        ahora.getTime() + VIGENCIA_VERIFICACION_MS,
+      );
+      usuario.verificacionUltimoEnvio = ahora;
+      usuario.verificacionVentanaInicio = ahora;
+      usuario.verificacionEnviosVentana = 1;
       const savedUsuario = await queryRunner.manager.save(usuario);
 
       const empleado = new Empleado();
@@ -123,12 +138,20 @@ export class AuthService {
 
       await queryRunner.commitTransaction();
 
+      // En segundo plano: un fallo de envío no afecta el registro, y el usuario
+      // puede pedir otro correo con POST /auth/reenviar-verificacion.
+      void this.cuentaCorreos.enviarVerificacion(
+        { nombre: savedUsuario.nombre, email: savedUsuario.email },
+        tokenVerificacion.token,
+      );
+
       const payload = {
         sub: savedUsuario.id,
         email: savedUsuario.email,
         rolId: 1,
         empresaId: savedEmpresa.id,
         sucursalId: savedSucursal.id,
+        tokenVersion: 0,
       };
       const accessToken = this.jwtService.sign(payload);
 
@@ -148,6 +171,7 @@ export class AuthService {
           apellido: savedUsuario.apellido,
           email: savedUsuario.email,
           rolId: 1,
+          emailVerificado: false,
           empleado: savedEmpleado
             ? {
                 id: savedEmpleado.id,
@@ -240,6 +264,7 @@ export class AuthService {
       rolId: user.rol?.id,
       empresaId: user.empresa?.id,
       sucursalId: empleado?.sucursal?.id,
+      tokenVersion: user.tokenVersion,
     };
 
     return {
@@ -250,6 +275,7 @@ export class AuthService {
         apellido: user.apellido,
         email: user.email,
         rolId: user.rol?.id,
+        emailVerificado: user.emailVerificado,
         empleado: empleado
           ? {
               id: empleado.id,

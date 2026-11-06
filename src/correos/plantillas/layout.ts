@@ -47,6 +47,16 @@ export interface DatosReservaCorreo {
 export const COLOR_POR_DEFECTO = '#4F46E5';
 export const COLOR_ESTADO_POR_DEFECTO = '#6b7280';
 
+/** Marca fija de los correos de cuenta (SPEC 04): la cuenta es de la plataforma, no de una empresa. */
+export const MARCA_AGENDAFLOW: MarcaEmpresa = {
+  nombre: 'AgendaFlow',
+  logoUrl: null,
+  colorPrincipal: COLOR_POR_DEFECTO,
+  telefono: null,
+  email: null,
+};
+export const PIE_AGENDAFLOW = 'Este correo fue enviado por AgendaFlow.';
+
 const FUENTE = 'Arial, Helvetica, sans-serif';
 const COLOR_TEXTO = '#1f2937';
 const COLOR_SUAVE = '#6b7280';
@@ -100,6 +110,23 @@ export function notaSuave(html: string): string {
   return `<p style="margin:16px 0 0 0;font-family:${FUENTE};font-size:13px;line-height:1.5;color:${COLOR_SUAVE};">${html}</p>`;
 }
 
+/** Botón compatible con clientes de correo. La URL y el texto se escapan. */
+export function botonAccion(
+  url: string,
+  texto: string,
+  color: string = COLOR_POR_DEFECTO,
+): string {
+  const fondo = colorValido(color);
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 24px 0;">
+      <tr>
+        <td align="center" bgcolor="${fondo}" style="background-color:${fondo};border-radius:8px;">
+          <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 28px;font-family:${FUENTE};font-size:15px;font-weight:bold;color:${colorTextoSobre(fondo)};text-decoration:none;">${escapeHtml(texto)}</a>
+        </td>
+      </tr>
+    </table>`;
+}
+
 /** Fila etiqueta/valor; se omite si el valor está vacío. El valor se escapa. */
 export type FilaDetalle = [etiqueta: string, valor: string | null | undefined];
 
@@ -151,11 +178,12 @@ export function detalleTexto(filas: FilaDetalle[]): string {
     .join('\n');
 }
 
-export function pieTexto(marca: MarcaEmpresa): string {
+export function pieTexto(marca: MarcaEmpresa, pie?: string): string {
   const contacto = [marca.telefono, marca.email].filter(Boolean).join(' · ');
   return [
     '—',
-    `Este correo fue enviado por ${marca.nombre} a través de AgendaFlow.`,
+    pie ??
+      `Este correo fue enviado por ${marca.nombre} a través de AgendaFlow.`,
     contacto,
   ]
     .filter(Boolean)
@@ -169,6 +197,8 @@ interface OpcionesLayout {
   titulo: string;
   /** HTML del cuerpo; quien lo arma es responsable de escapar los valores. */
   contenidoHtml: string;
+  /** Reemplaza la frase del pie. Se escapa. */
+  pie?: string;
 }
 
 export function layoutCorreo({
@@ -176,6 +206,7 @@ export function layoutCorreo({
   preheader,
   titulo,
   contenidoHtml,
+  pie,
 }: OpcionesLayout): string {
   const color = colorValido(marca.colorPrincipal);
   const colorTexto = colorTextoSobre(color);
@@ -184,6 +215,10 @@ export function layoutCorreo({
   const encabezado = marca.logoUrl
     ? `<img src="${escapeHtml(marca.logoUrl)}" alt="${nombre}" height="64" style="display:block;margin:0 auto;max-height:120px;height:64px;width:auto;border:0;outline:none;text-decoration:none;font-family:${FUENTE};font-size:22px;font-weight:bold;color:${colorTexto};" />`
     : `<span style="font-family:${FUENTE};font-size:22px;font-weight:bold;color:${colorTexto};">${nombre}</span>`;
+
+  const frasePie = pie
+    ? escapeHtml(pie)
+    : `Este correo fue enviado por ${nombre} a través de AgendaFlow.`;
 
   const contacto = [marca.telefono, marca.email]
     .filter(Boolean)
@@ -218,7 +253,7 @@ export function layoutCorreo({
           <tr>
             <td style="padding:20px 32px 28px 32px;border-top:1px solid #eef0f3;">
               <p style="margin:0;font-family:${FUENTE};font-size:12px;line-height:1.5;color:#9ca3af;text-align:center;">
-                Este correo fue enviado por ${nombre} a través de AgendaFlow.${contacto ? `<br />${contacto}` : ''}
+                ${frasePie}${contacto ? `<br />${contacto}` : ''}
               </p>
             </td>
           </tr>
