@@ -28,13 +28,22 @@ export class EmpleadosController {
   constructor(private readonly empleadosService: EmpleadosService) {}
 
   @Get()
-  findAll(@Query('sucursalId', ParseIntPipe) sucursalId: number) {
-    return this.empleadosService.findAllBySucursal(sucursalId);
+  findAll(
+    @Query('sucursalId', ParseIntPipe) sucursalId: number,
+    @Req() req: { user?: JwtPayload },
+  ) {
+    return this.empleadosService.findAllBySucursal(
+      sucursalId,
+      req.user!.empresaId,
+    );
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.empleadosService.findOne(id);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user?: JwtPayload },
+  ) {
+    return this.empleadosService.findOne(id, req.user!.empresaId);
   }
 
   @Post()

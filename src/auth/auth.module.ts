@@ -18,6 +18,10 @@ import { Rol } from '../rol/entities/rol.entity';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const secret = config.get<string>('JWT_SECRET');
+        // Sin secreto los tokens no serían confiables: mejor no arrancar.
+        if (!secret?.trim()) {
+          throw new Error('JWT_SECRET no está configurado');
+        }
         // Las variables de .env llegan como string. jsonwebtoken interpreta un string
         // numérico sin unidad como MILISEGUNDOS ("86400" = 86 s), así que se convierte
         // a número (segundos). También acepta formatos con unidad: "7d", "12h".

@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Bloqueo } from './entities/bloqueo.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
+import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { CreateBloqueoDto } from './dto/create-bloqueo.dto';
 import { UpdateBloqueoDto } from './dto/update-bloqueo.dto';
 
@@ -17,9 +18,24 @@ export class BloqueosService {
     private readonly bloqueoRepo: Repository<Bloqueo>,
     @InjectRepository(Empleado)
     private readonly empleadoRepo: Repository<Empleado>,
+    @InjectRepository(Sucursal)
+    private readonly sucursalRepo: Repository<Sucursal>,
   ) {}
 
-  async findAllBySucursal(sucursalId: number) {
+  async findAllBySucursal(sucursalId: number, empresaId: number) {
+    const sucursal = await this.sucursalRepo.findOne({
+      where: { id: sucursalId },
+      relations: { empresa: true },
+    });
+    if (!sucursal) {
+      throw new NotFoundException('Sucursal no encontrada');
+    }
+    if (sucursal.empresa.id !== empresaId) {
+      throw new ForbiddenException(
+        'No tienes permiso para ver los bloqueos de esta sucursal',
+      );
+    }
+
     return this.bloqueoRepo.find({
       where: { empleado: { sucursal: { id: sucursalId } } },
       relations: { empleado: true },

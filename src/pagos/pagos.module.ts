@@ -3,13 +3,14 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Pago } from './entities/pago.entity';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Estado } from '../reservas/entities/estado.entity';
+import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { PagosController } from './pagos.controller';
 import { PagosService } from './pagos.service';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Pago, Reserva, Estado]),
+    TypeOrmModule.forFeature([Pago, Reserva, Estado, Sucursal]),
     AuthModule,
   ],
   controllers: [PagosController],

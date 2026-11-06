@@ -3,13 +3,16 @@ import {
   ConflictException,
   UnauthorizedException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'node:crypto';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
+import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
 import { Estado } from '../reservas/entities/estado.entity';
@@ -20,6 +23,8 @@ import { LoginDto } from './dto/login.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(Usuario)
     private readonly usuarioRepo: Repository<Usuario>,
@@ -38,7 +43,7 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
-    const slug = this.generateSlug(dto.empresaNombre);
+    const slug = await this.generateUniqueSlug(dto.empresaNombre);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -128,7 +133,10 @@ export class AuthService {
       const accessToken = this.jwtService.sign(payload);
 
       const savedEmpleado = await this.empleadoRepo.findOne({
-        where: { email: dto.email.toLowerCase() },
+        where: {
+          email: dto.email.toLowerCase(),
+          sucursal: { empresa: { id: savedEmpresa.id } },
+        },
         relations: { sucursal: { empresa: true } },
       });
 
@@ -172,8 +180,13 @@ export class AuthService {
       if (error instanceof ConflictException) {
         throw error;
       }
+      // El detalle queda en el log del servidor; al cliente no se le filtra.
+      this.logger.error(
+        'Error al registrar usuario',
+        error instanceof Error ? error.stack : String(error),
+      );
       throw new InternalServerErrorException(
-        'Error al registrar usuario: ' + error.message,
+        'No se pudo completar el registro. Inténtalo de nuevo.',
       );
     } finally {
       await queryRunner.release();
@@ -212,8 +225,12 @@ export class AuthService {
       throw new UnauthorizedException('Cuenta desactivada');
     }
 
+    // Acotado a su empresa: otra empresa podría crear un empleado con este mismo email.
     const empleado = await this.empleadoRepo.findOne({
-      where: { email: dto.email.toLowerCase() },
+      where: {
+        email: dto.email.toLowerCase(),
+        sucursal: { empresa: { id: user.empresa?.id } },
+      },
       relations: { sucursal: { empresa: true } },
     });
 
@@ -259,6 +276,20 @@ export class AuthService {
           : null,
       },
     };
+  }
+
+  /** El slug es único y no puede quedar vacío (p. ej. un nombre solo con símbolos). */
+  private async generateUniqueSlug(text: string): Promise<string> {
+    const base = this.generateSlug(text).slice(0, 90).replace(/-$/, '') || 'empresa';
+    const manager = this.dataSource.manager;
+    const enUso = async (slug: string) =>
+      (await manager.existsBy(Empresa, { slug })) ||
+      (await manager.existsBy(EmpresaSlug, { slug }));
+
+    if (base !== 'empresa' && !(await enUso(base))) {
+      return base;
+    }
+    return `${base}-${randomBytes(4).toString('hex')}`;
   }
 
   private generateSlug(text: string): string {

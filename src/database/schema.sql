@@ -334,7 +334,11 @@ USING (VALUES
     (10, 'Usuario', 'Pendiente',  '#f39c12', 3),
     (11, 'Empresa', 'Activa',     '#2ecc71', 1),
     (12, 'Empresa', 'Inactiva',   '#e74c3c', 2),
-    (13, 'Empresa', 'Suspendida', '#f39c12', 3)
+    (13, 'Empresa', 'Suspendida', '#f39c12', 3),
+    (14, 'Pago',    'Pendiente',  '#f39c12', 1),
+    (15, 'Pago',    'Pagado',     '#27ae60', 2),
+    (16, 'Pago',    'Rechazado',  '#c0392b', 3),
+    (17, 'Pago',    'Reembolsado','#95a5a6', 4)
 ) AS origen (id, Tipo, Nombre, Color, Orden)
 ON destino.Tipo = origen.Tipo AND destino.Nombre = origen.Nombre
 WHEN NOT MATCHED THEN
