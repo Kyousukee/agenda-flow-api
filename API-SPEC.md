@@ -170,6 +170,10 @@
 |--------|-----------------------|------|--------|----------------------|
 | POST   | `/auth/login`         | No   | -      | Login, retorna JWT   |
 | POST   | `/auth/register`      | No   | -      | Registrar empleado   |
+| POST   | `/auth/verificar-email` | No | - | Verifica el email con el token del correo |
+| POST   | `/auth/reenviar-verificacion` | Sí | - | Reenvía el correo de verificación |
+| POST   | `/auth/olvide-contrasena` | No | - | Pide el correo para restablecer la contraseña |
+| POST   | `/auth/restablecer-contrasena` | No | - | Cambia la contraseña con el token del correo |
 
 **POST `/auth/login`**
 
@@ -221,6 +225,67 @@ Response `201`:
   "sucursal_id": "uuid-..."
 }
 ```
+
+**Verificación de email y recuperación de contraseña** (ver `specs/04-verificacion-email-y-recuperacion-contrasena.md`)
+
+`POST /auth/login` y `POST /auth/register` devuelven `user.emailVerificado` (boolean). Una cuenta sin verificar conserva todo el acceso.
+
+Estas 4 rutas tienen un límite de 5 peticiones por minuto por IP. Si se supera, responden `429`.
+
+**POST `/auth/verificar-email`**
+
+Request:
+```json
+{ "token": "..." }
+```
+
+Response `200`:
+```json
+{ "emailVerificado": true }
+```
+
+Response `400` si el token no existe, venció (24 horas) o ya se usó: `El enlace no es válido o venció`.
+
+**POST `/auth/reenviar-verificacion`** (requiere JWT, sin cuerpo)
+
+Response `200`:
+```json
+{ "emailVerificado": false }
+```
+
+- Devuelve `true` y no envía nada si el email ya está verificado.
+- Devuelve `false` también si se superó el límite por usuario (1 por minuto, 5 por hora), sin enviar nada.
+- Un token nuevo invalida el enlace anterior.
+
+**POST `/auth/olvide-contrasena`**
+
+Request:
+```json
+{ "email": "juan@empresa.com" }
+```
+
+Response `200`, siempre la misma, exista o no la cuenta:
+```json
+{ "message": "Si el email está registrado, te enviaremos un enlace para restablecer tu contraseña." }
+```
+
+No se envía correo si el email no existe, si la cuenta está desactivada o si se superó el límite por usuario (1 por minuto, 5 por hora).
+
+**POST `/auth/restablecer-contrasena`**
+
+Request (`password` de 8 a 72 caracteres):
+```json
+{ "token": "...", "password": "secret123" }
+```
+
+Response `200`:
+```json
+{ "message": "Tu contraseña fue restablecida. Inicia sesión." }
+```
+
+- Deja el email verificado y cierra todas las sesiones: los JWT anteriores responden `401`.
+- No inicia sesión: hay que llamar a `POST /auth/login`.
+- Response `400` si el token no existe, venció (1 hora), ya se usó o la cuenta está desactivada: `El enlace no es válido o venció`.
 
 ---
 

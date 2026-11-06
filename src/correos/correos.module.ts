@@ -5,10 +5,11 @@ import { ConfiguracionEmpresa } from '../configuracion-empresa/entities/configur
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { CorreosService } from './correos.service';
 import { ReservaCorreosService } from './reserva-correos.service';
+import { CuentaCorreosService } from './cuenta-correos.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Reserva, ConfiguracionEmpresa, Usuario])],
-  providers: [CorreosService, ReservaCorreosService],
-  exports: [CorreosService, ReservaCorreosService],
+  providers: [CorreosService, ReservaCorreosService, CuentaCorreosService],
+  exports: [CorreosService, ReservaCorreosService, CuentaCorreosService],
 })
 export class CorreosModule {}
