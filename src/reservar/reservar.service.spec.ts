@@ -35,6 +35,7 @@ function montar(
     empleado?: unknown;
     ofrece?: unknown;
     solapes?: number;
+    horarios?: unknown[];
   } = {},
 ) {
   const repo = (valor: unknown) => ({
@@ -60,6 +61,13 @@ function montar(
     ),
   };
   const correos = { notificarNuevaReserva: jest.fn() };
+  const horarioRepo = {
+    find: jest
+      .fn()
+      .mockResolvedValue(
+        opciones.horarios ?? [{ horaInicio: '09:00:00', horaFin: '18:00:00' }],
+      ),
+  };
 
   const service = new (ReservarService as unknown as new (
     ...args: unknown[]
@@ -86,7 +94,7 @@ function montar(
         ? opciones.empleado
         : { id: EMPLEADO, activo: true, sucursal: { id: SUCURSAL } },
     ),
-    {}, // horario
+    horarioRepo,
     {}, // bloqueo
     repo('ofrece' in opciones ? opciones.ofrece : { id: 1 }),
     {}, // empresaSlug
@@ -95,7 +103,7 @@ function montar(
     {}, // suscripciones
     correos,
   );
-  return { service, manager, correos, dataSource };
+  return { service, manager, correos, dataSource, horarioRepo };
 }
 
 describe('ReservarService.createReserva', () => {
@@ -171,6 +179,60 @@ describe('ReservarService.createReserva', () => {
     await expect(
       service.createReserva(dto({ horaInicio: '23:50' })),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  describe('horario de atención', () => {
+    it.each([
+      ['antes de abrir', '08:30'],
+      ['termina después de cerrar', '17:30'],
+    ])('rechaza una reserva que %s', async (_caso, horaInicio) => {
+      const { service, dataSource } = montar();
+
+      await expect(
+        service.createReserva(dto({ horaInicio })),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('acepta una reserva que termina justo al cerrar', async () => {
+      const { service } = montar();
+
+      const res = await service.createReserva(dto({ horaInicio: '17:15' }));
+
+      expect(res.horaFin).toBe('18:00');
+    });
+
+    it('rechaza un día sin horario abierto', async () => {
+      const { service } = montar({ horarios: [] });
+
+      await expect(service.createReserva(dto())).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('acepta el segundo tramo cuando el día tiene varios', async () => {
+      const { service } = montar({
+        horarios: [
+          { horaInicio: '09:00:00', horaFin: '09:30:00' },
+          { horaInicio: '10:00:00', horaFin: '13:00:00' },
+        ],
+      });
+
+      await expect(service.createReserva(dto())).resolves.toBeDefined();
+    });
+
+    it.each([
+      ['2030-01-06', 7, 'domingo'],
+      ['2030-01-07', 1, 'lunes'],
+    ])('%s se busca como día %i (%s)', async (fecha, diaSemana) => {
+      const { service, horarioRepo } = montar();
+
+      await service.createReserva(dto({ fecha }));
+
+      expect(horarioRepo.find).toHaveBeenCalledWith({
+        where: { sucursal: { id: SUCURSAL }, diaSemana, abierto: true },
+      });
+    });
   });
 
   it('responde 409 si la hora ya está tomada y no envía correo', async () => {

@@ -41,6 +41,11 @@ export class PagosController {
     return this.pagosService.actualizarEstado(id, dto, req.user!.empresaId);
   }
 
+  @Get('estados')
+  obtenerEstados() {
+    return this.pagosService.obtenerEstados();
+  }
+
   @Get()
   findAll(
     @Query('sucursalId', ParseIntPipe) sucursalId: number,

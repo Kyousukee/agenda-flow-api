@@ -1,6 +1,8 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -25,6 +27,39 @@ export class PagosService {
     private readonly sucursalRepo: Repository<Sucursal>,
   ) {}
 
+  async obtenerEstados() {
+    const estados = await this.estadoRepo.find({
+      where: { tipo: 'Pago', activo: true },
+      order: { orden: 'ASC' },
+    });
+    return estados.map((e) => ({ id: e.id, nombre: e.nombre, color: e.color }));
+  }
+
+  /** Un pago solo admite estados de tipo Pago: el catálogo también tiene los de reservas y usuarios. */
+  private async obtenerEstadoDePago(estadoId: number): Promise<Estado> {
+    const estado = await this.estadoRepo.findOne({ where: { id: estadoId } });
+    if (!estado) {
+      throw new NotFoundException('Estado no encontrado');
+    }
+    if (estado.tipo !== 'Pago') {
+      throw new BadRequestException('El estado no es válido para un pago');
+    }
+    return estado;
+  }
+
+  /** Registrar un pago significa que se recibió, salvo que se indique otro estado. */
+  private async obtenerEstadoInicial(): Promise<Estado> {
+    const estado = await this.estadoRepo.findOne({
+      where: { tipo: 'Pago', nombre: 'Pagado' },
+    });
+    if (!estado) {
+      throw new InternalServerErrorException(
+        "No existe el estado 'Pagado' de tipo 'Pago'",
+      );
+    }
+    return estado;
+  }
+
   async create(dto: CreatePagoDto, empresaId: number) {
     const reserva = await this.reservaRepo.findOne({
       where: { id: dto.reservaId },
@@ -39,13 +74,17 @@ export class PagosService {
       );
     }
 
+    const estado = dto.estadoId
+      ? await this.obtenerEstadoDePago(dto.estadoId)
+      : await this.obtenerEstadoInicial();
+
     const pago = this.pagoRepo.create({
       monto: dto.monto,
       metodoPago: dto.metodoPago,
       codigoTransaccion: dto.codigoTransaccion,
       fechaPago: dto.fechaPago,
       reserva,
-      estado: dto.estadoId ? ({ id: dto.estadoId } as any) : undefined,
+      estado,
     });
 
     return this.pagoRepo.save(pago);
@@ -69,12 +108,7 @@ export class PagosService {
       );
     }
 
-    const estado = await this.estadoRepo.findOne({ where: { id: dto.estadoId } });
-    if (!estado) {
-      throw new NotFoundException('Estado no encontrado');
-    }
-
-    pago.estado = estado;
+    pago.estado = await this.obtenerEstadoDePago(dto.estadoId);
     return this.pagoRepo.save(pago);
   }
 

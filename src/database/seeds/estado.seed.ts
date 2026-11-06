@@ -23,12 +23,20 @@ const ESTADOS_EMPRESA = [
   { tipo: 'Empresa', nombre: 'Suspendida', color: '#f39c12', orden: 3 },
 ];
 
+const ESTADOS_PAGO = [
+  { tipo: 'Pago', nombre: 'Pendiente', color: '#f39c12', orden: 1 },
+  { tipo: 'Pago', nombre: 'Pagado', color: '#27ae60', orden: 2 },
+  { tipo: 'Pago', nombre: 'Rechazado', color: '#c0392b', orden: 3 },
+  { tipo: 'Pago', nombre: 'Reembolsado', color: '#95a5a6', orden: 4 },
+];
+
 export async function seedEstados(dataSource: DataSource): Promise<void> {
   const repository = dataSource.getRepository(Estado);
   const allEstados = [
     ...ESTADOS_RESERVA,
     ...ESTADOS_USUARIO,
     ...ESTADOS_EMPRESA,
+    ...ESTADOS_PAGO,
   ];
 
   for (const estado of allEstados) {

@@ -46,6 +46,11 @@ function aHora(minutos: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/** Día de la semana de una fecha AAAA-MM-DD: 1 = lunes … 7 = domingo. */
+function diaDeLaSemana(fecha: string): number {
+  return new Date(`${fecha}T12:00:00Z`).getUTCDay() || 7;
+}
+
 /** Margen de un día: el servidor y el cliente pueden estar en husos horarios distintos. */
 function fechaMinima(): string {
   return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -321,7 +326,32 @@ export class ReservarService {
       throw invalida();
     }
 
+    await this.validarHorarioDeAtencion(dto, inicio, fin);
+
     return { servicio, horaInicio: aHora(inicio), horaFin: aHora(fin) };
+  }
+
+  /** La reserva completa debe caber en un horario abierto de la sucursal para ese día. */
+  private async validarHorarioDeAtencion(
+    dto: CreateReservaDto,
+    inicio: number,
+    fin: number,
+  ): Promise<void> {
+    const horarios = await this.horarioRepo.find({
+      where: {
+        sucursal: { id: dto.sucursalId },
+        diaSemana: diaDeLaSemana(dto.fecha),
+        abierto: true,
+      },
+    });
+    const dentroDelHorario = horarios.some(
+      (h) => aMinutos(h.horaInicio) <= inicio && fin <= aMinutos(h.horaFin),
+    );
+    if (!dentroDelHorario) {
+      throw new BadRequestException(
+        'La hora seleccionada está fuera del horario de atención',
+      );
+    }
   }
 
   private async validarHoraLibre(

@@ -17,6 +17,8 @@ Variables nuevas:
 
 `JWT_SECRET` ahora es obligatorio: sin él, la API no arranca.
 
+**Migración obligatoria:** ejecutar `src/database/migrations/002-estados-pago.sql` en cada base. El seed crea el catálogo al arrancar, pero solo la migración corrige los pagos ya guardados. Es idempotente; al final informa cuántos pagos no pudo corregir.
+
 **Si producción ya está activa:** C1, C2 y A1 pueden haber expuesto datos reales de clientes. Revisar los logs de acceso de esas rutas y valorar si corresponde avisar a los afectados.
 
 ## Hallazgos
@@ -42,6 +44,12 @@ Otros cambios en `POST /reservar`:
 - Los clientes se buscan dentro de su empresa.
 - La respuesta pública ya no incluye al cliente.
 
+## Correcciones funcionales
+
+- **Estados de pago:** el catálogo no tenía estados de tipo `Pago`. Se añadieron Pendiente, Pagado, Rechazado y Reembolsado, con `GET /pagos/estados` (requiere sesión). Crear o cambiar un pago con un estado de otro tipo responde 400, y un pago nuevo sin estado queda como Pagado.
+- **Migración de pagos existentes:** los IDs 6 a 9 se traducen a la etiqueta que mostraba el panel. El ID 1 y los pagos sin estado pasan a Pagado, **lo cual es una suposición**: el panel enviaba siempre el 1 al registrar, así que no se puede saber si alguno no se había cobrado. Probada dentro de una transacción con `ROLLBACK`.
+- **Horario de atención:** `POST /reservar` responde 400 si la reserva completa no cabe en un horario abierto de la sucursal para ese día. Una sucursal sin horarios guardados no acepta reservas, igual que la página pública, que tampoco le ofrece horas.
+
 ## Revisado sin hallazgos
 
 - `npm audit --omit=dev`: 0 vulnerabilidades.
@@ -62,6 +70,6 @@ Otros cambios en `POST /reservar`:
 - **Sesión:** el JWT dura 7 días por defecto y no se puede revocar. Decidirlo junto con la rama `Supabase`.
 - **Registro abierto:** no verifica el email ni tiene captcha. El límite por IP lo frena, pero no lo evita.
 - **Abuso de reservas públicas:** el límite es por IP y no se verifica el email del cliente, así que se pueden seguir enviando correos a terceros a baja velocidad.
-- **Horario de apertura:** `POST /reservar` no comprueba que la hora esté dentro del horario de la sucursal.
+- **Horas ya pasadas de hoy:** `POST /reservar` admite una hora anterior a la actual dentro del día, por el margen de husos horarios. La página pública no las ofrece.
 - **`JWT_SECRET` corto:** conviene usar al menos 32 caracteres aleatorios en producción.
 - **`encrypt: false`** en la conexión a SQL Server (`database.config.ts`): debe activarse si la base no es local.
