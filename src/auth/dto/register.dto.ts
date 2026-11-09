@@ -4,34 +4,11 @@ import {
   IsOptional,
   IsNumber,
   MinLength,
-  Min,
   MaxLength,
-  IsLatitude,
-  IsLongitude,
-  validate,
 } from 'class-validator';
-import { Type, plainToInstance } from 'class-transformer';
 
-export class RegisterDto {
-  // === PASO 1: Cuenta de usuario ===
-  @IsString()
-  @MinLength(2)
-  @MaxLength(100)
-  nombre: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  apellido?: string;
-
-  @IsEmail()
-  @MaxLength(150)
-  email: string;
-
-  @IsString()
-  @MinLength(8)
-  password: string;
-
+/** Datos del negocio y su primera sucursal. Los comparten el registro normal y el de Google. */
+export class DatosNegocioDto {
   // === PASO 2: Datos del negocio ===
   @IsString()
   @MinLength(2)
@@ -91,4 +68,25 @@ export class RegisterDto {
   @IsOptional()
   @IsNumber()
   longitud?: number | null;
+}
+
+export class RegisterDto extends DatosNegocioDto {
+  // === PASO 1: Cuenta de usuario ===
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  nombre: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  apellido?: string;
+
+  @IsEmail()
+  @MaxLength(150)
+  email: string;
+
+  @IsString()
+  @MinLength(8)
+  password: string;
 }

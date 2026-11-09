@@ -222,7 +222,7 @@ CREATE TABLE dbo.Usuario (
     Nombre              NVARCHAR(100)  NOT NULL,
     Apellido            NVARCHAR(100)  NULL,
     Email               NVARCHAR(150)  NOT NULL CONSTRAINT UQ_Usuario_Email UNIQUE,
-    PasswordHash        NVARCHAR(MAX)  NOT NULL,
+    PasswordHash        NVARCHAR(MAX)  NULL,     -- NULL: cuenta creada con Google (SPEC 05)
     Telefono            NVARCHAR(20)   NULL,
     Activo              BIT            NOT NULL CONSTRAINT DF_Usuario_Activo DEFAULT 1,
     FechaCreacion       DATETIME2      NOT NULL CONSTRAINT DF_Usuario_FechaCreacion DEFAULT GETDATE(),
@@ -242,6 +242,7 @@ CREATE TABLE dbo.Usuario (
     ResetUltimoEnvio          DATETIME2    NULL,
     ResetVentanaInicio        DATETIME2    NULL,
     ResetEnviosVentana        INT          NOT NULL CONSTRAINT DF_Usuario_ResetEnvios DEFAULT 0,
+    GoogleId                  NVARCHAR(255) NULL,
     CONSTRAINT FK_Usuario_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id),
     CONSTRAINT FK_Usuario_Rol     FOREIGN KEY (RolId)     REFERENCES dbo.Rol(id),
     CONSTRAINT FK_Usuario_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
@@ -257,6 +258,12 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Usuario_ResetTokenHash')
 CREATE INDEX IX_Usuario_ResetTokenHash
     ON dbo.Usuario(ResetTokenHash) WHERE ResetTokenHash IS NOT NULL;
+GO
+
+-- Una cuenta de Google se vincula a un solo usuario (SPEC 05)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Usuario_GoogleId')
+CREATE UNIQUE INDEX UX_Usuario_GoogleId
+    ON dbo.Usuario(GoogleId) WHERE GoogleId IS NOT NULL;
 GO
 
 /* ---------------------------------------------------------------------

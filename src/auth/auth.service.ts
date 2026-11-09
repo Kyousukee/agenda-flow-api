@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
+import { Repository, DataSource, EntityManager, IsNull } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
@@ -19,9 +19,30 @@ import { Estado } from '../reservas/entities/estado.entity';
 import { Suscripcion } from '../suscripciones/entities/suscripcion.entity';
 import { DIAS_PRUEBA } from '../suscripciones/planes';
 import { CuentaCorreosService } from '../correos/cuenta-correos.service';
-import { RegisterDto } from './dto/register.dto';
+import { DatosNegocioDto, RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { VIGENCIA_VERIFICACION_MS, generarToken } from './token-cuenta';
+import { GoogleRegistroDto } from './dto/google-registro.dto';
+import { GoogleAuthService } from './google-auth.service';
+import {
+  TokenCuenta,
+  VIGENCIA_VERIFICACION_MS,
+  generarToken,
+} from './token-cuenta';
+
+/** Datos con los que se crea una cuenta nueva (empresa, sucursal, usuario y empleado). */
+interface DatosCuentaNueva extends DatosNegocioDto {
+  nombre: string;
+  apellido?: string;
+  /** Ya en minúsculas. */
+  email: string;
+}
+
+/** Cómo se autentica la cuenta nueva. */
+type CredencialCuenta =
+  | { tipo: 'password'; passwordHash: string; verificacion: TokenCuenta }
+  | { tipo: 'google'; googleId: string };
+
+const MENSAJE_EMAIL_REGISTRADO = 'El email ya está registrado';
 
 @Injectable()
 export class AuthService {
@@ -35,19 +56,172 @@ export class AuthService {
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly cuentaCorreos: CuentaCorreosService,
+    private readonly googleAuth: GoogleAuthService,
   ) {}
 
   async register(dto: RegisterDto) {
-    const existingUser = await this.usuarioRepo.findOne({
-      where: { email: dto.email.toLowerCase() },
-    });
+    const email = dto.email.toLowerCase();
+    const existingUser = await this.usuarioRepo.findOne({ where: { email } });
     if (existingUser) {
-      throw new ConflictException('El email ya está registrado');
+      throw new ConflictException(MENSAJE_EMAIL_REGISTRADO);
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
-    const slug = await this.generateUniqueSlug(dto.empresaNombre);
-    const tokenVerificacion = generarToken();
+    const verificacion = generarToken();
+
+    const { usuario, sucursalId } = await this.crearCuenta(
+      { ...dto, email },
+      { tipo: 'password', passwordHash, verificacion },
+    );
+
+    // En segundo plano: un fallo de envío no afecta el registro, y el usuario
+    // puede pedir otro correo con POST /auth/reenviar-verificacion.
+    void this.cuentaCorreos.enviarVerificacion(
+      { nombre: usuario.nombre, email: usuario.email },
+      verificacion.token,
+    );
+
+    return this.construirRespuesta(usuario, sucursalId);
+  }
+
+  async login(dto: LoginDto) {
+    const user = await this.usuarioRepo.findOne({
+      where: { email: dto.email.toLowerCase() },
+      relations: { rol: true, empresa: true },
+    });
+    if (!user) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // SPEC 05: una cuenta creada con Google no tiene contraseña hasta que la crea
+    // con "olvidé mi contraseña".
+    if (!user.passwordHash) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    const passwordMatch = await bcrypt.compare(dto.password, user.passwordHash);
+    if (!passwordMatch) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    if (!user.activo) {
+      throw new UnauthorizedException('Cuenta desactivada');
+    }
+
+    return this.construirRespuesta(user);
+  }
+
+  /**
+   * SPEC 05: inicia sesión con el ID token de Google. Si la cuenta de Google no
+   * está vinculada pero el email existe, la vincula. Si no hay cuenta, responde
+   * `requiereRegistro` para que el front pida los datos del negocio.
+   */
+  async loginGoogle(credential: string) {
+    const perfil = await this.googleAuth.verificar(credential);
+    const relations = { rol: true, empresa: true } as const;
+
+    let user = await this.usuarioRepo.findOne({
+      where: { googleId: perfil.sub },
+      relations,
+    });
+
+    if (!user) {
+      const porEmail = await this.usuarioRepo.findOne({
+        where: { email: perfil.email },
+        relations,
+      });
+      if (!porEmail) {
+        return {
+          requiereRegistro: true as const,
+          perfil: {
+            email: perfil.email,
+            nombre: perfil.nombre,
+            apellido: perfil.apellido ?? null,
+          },
+        };
+      }
+      if (!porEmail.activo) {
+        throw new UnauthorizedException('Cuenta desactivada');
+      }
+      user = await this.vincularGoogle(porEmail, perfil.sub);
+    }
+
+    if (!user.activo) {
+      throw new UnauthorizedException('Cuenta desactivada');
+    }
+
+    return this.construirRespuesta(user);
+  }
+
+  /** SPEC 05: crea la cuenta con la identidad del ID token y los datos del negocio. */
+  async registroGoogle(dto: GoogleRegistroDto) {
+    const perfil = await this.googleAuth.verificar(dto.credential);
+
+    const existente = await this.usuarioRepo.findOne({
+      where: [{ email: perfil.email }, { googleId: perfil.sub }],
+    });
+    if (existente) {
+      throw new ConflictException(
+        'Ya existe una cuenta con este email. Inicia sesión con Google.',
+      );
+    }
+
+    const { usuario, sucursalId } = await this.crearCuenta(
+      {
+        ...dto,
+        nombre: dto.nombre?.trim() || perfil.nombre,
+        apellido: dto.apellido?.trim() || perfil.apellido,
+        email: perfil.email,
+      },
+      { tipo: 'google', googleId: perfil.sub },
+    );
+
+    return this.construirRespuesta(usuario, sucursalId);
+  }
+
+  /**
+   * Vincula la cuenta de Google a un usuario existente con el mismo email. Google
+   * ya comprobó el email, así que la cuenta queda verificada.
+   *
+   * Si el email no estaba verificado, la contraseña la pudo crear otra persona
+   * que registró este email antes que su dueño. Por eso se borra y se cierran
+   * las sesiones abiertas: el dueño puede crear otra con "olvidé mi contraseña".
+   */
+  private async vincularGoogle(user: Usuario, googleId: string) {
+    const cambios: Partial<Usuario> = {
+      googleId,
+      emailVerificado: true,
+      verificacionTokenHash: null,
+      verificacionExpira: null,
+    };
+    if (!user.emailVerificado) {
+      cambios.passwordHash = null;
+      cambios.tokenVersion = user.tokenVersion + 1;
+    }
+
+    // Condicional: no reemplaza otra cuenta de Google ya vinculada a este usuario.
+    const resultado = await this.usuarioRepo.update(
+      { id: user.id, googleId: IsNull() },
+      cambios,
+    );
+    if (resultado.affected !== 1) {
+      throw new ConflictException(
+        'Este email ya está vinculado a otra cuenta de Google.',
+      );
+    }
+
+    return Object.assign(user, cambios);
+  }
+
+  /**
+   * Crea en una transacción la empresa, su suscripción de prueba, la primera
+   * sucursal, el usuario administrador y su empleado.
+   */
+  private async crearCuenta(
+    datos: DatosCuentaNueva,
+    credencial: CredencialCuenta,
+  ): Promise<{ usuario: Usuario; sucursalId: number }> {
+    const slug = await this.generateUniqueSlug(datos.empresaNombre);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -66,11 +240,11 @@ export class AuthService {
       );
 
       const empresa = new Empresa();
-      empresa.nombre = dto.empresaNombre;
-      empresa.nombreComercial = dto.nombreComercial ?? undefined;
+      empresa.nombre = datos.empresaNombre;
+      empresa.nombreComercial = datos.nombreComercial ?? undefined;
       empresa.slug = slug;
-      empresa.email = dto.empresaEmail ?? undefined;
-      empresa.telefono = dto.telefono ?? undefined;
+      empresa.email = datos.empresaEmail ?? undefined;
+      empresa.telefono = datos.telefono ?? undefined;
       empresa.estadoId = estadoEmpresa.id;
       empresa.fechaCreacion = new Date();
       const savedEmpresa = await queryRunner.manager.save(empresa);
@@ -89,120 +263,73 @@ export class AuthService {
 
       const sucursal = new Sucursal();
       sucursal.empresa = savedEmpresa;
-      sucursal.nombre = dto.sucursalNombre || 'Sucursal Principal';
-      sucursal.direccion = dto.direccion ?? undefined;
-      sucursal.comuna = dto.comuna ?? undefined;
-      sucursal.ciudad = dto.ciudad ?? undefined;
-      sucursal.region = dto.region ?? undefined;
-      sucursal.pais = dto.pais || 'Chile';
-      sucursal.latitud = dto.latitud ?? undefined;
-      sucursal.longitud = dto.longitud ?? undefined;
-      sucursal.telefono = dto.telefono ?? undefined;
+      sucursal.nombre = datos.sucursalNombre || 'Sucursal Principal';
+      sucursal.direccion = datos.direccion ?? undefined;
+      sucursal.comuna = datos.comuna ?? undefined;
+      sucursal.ciudad = datos.ciudad ?? undefined;
+      sucursal.region = datos.region ?? undefined;
+      sucursal.pais = datos.pais || 'Chile';
+      sucursal.latitud = datos.latitud ?? undefined;
+      sucursal.longitud = datos.longitud ?? undefined;
+      sucursal.telefono = datos.telefono ?? undefined;
       sucursal.activo = true;
       sucursal.fechaCreacion = new Date();
       const savedSucursal = await queryRunner.manager.save(sucursal);
 
       const usuario = new Usuario();
       usuario.empresa = savedEmpresa;
-      usuario.nombre = dto.nombre;
-      usuario.apellido = dto.apellido ?? undefined;
-      usuario.email = dto.email.toLowerCase();
-      usuario.passwordHash = passwordHash;
-      usuario.telefono = dto.telefono ?? undefined;
+      usuario.nombre = datos.nombre;
+      usuario.apellido = datos.apellido ?? undefined;
+      usuario.email = datos.email;
+      usuario.telefono = datos.telefono ?? undefined;
       usuario.activo = true;
       usuario.rol = { id: 1 } as any;
       usuario.estado = estadoUsuario;
       usuario.fechaCreacion = new Date();
-      // SPEC 04: se guarda solo el hash. Este correo cuenta como el primer envío.
-      const ahora = new Date();
-      usuario.emailVerificado = false;
       usuario.tokenVersion = 0;
-      usuario.verificacionTokenHash = tokenVerificacion.hash;
-      usuario.verificacionExpira = new Date(
-        ahora.getTime() + VIGENCIA_VERIFICACION_MS,
-      );
-      usuario.verificacionUltimoEnvio = ahora;
-      usuario.verificacionVentanaInicio = ahora;
-      usuario.verificacionEnviosVentana = 1;
+
+      if (credencial.tipo === 'password') {
+        // SPEC 04: se guarda solo el hash. Este correo cuenta como el primer envío.
+        const ahora = new Date();
+        usuario.passwordHash = credencial.passwordHash;
+        usuario.emailVerificado = false;
+        usuario.verificacionTokenHash = credencial.verificacion.hash;
+        usuario.verificacionExpira = new Date(
+          ahora.getTime() + VIGENCIA_VERIFICACION_MS,
+        );
+        usuario.verificacionUltimoEnvio = ahora;
+        usuario.verificacionVentanaInicio = ahora;
+        usuario.verificacionEnviosVentana = 1;
+      } else {
+        // SPEC 05: Google ya verificó el email; la cuenta no tiene contraseña.
+        usuario.passwordHash = null;
+        usuario.googleId = credencial.googleId;
+        usuario.emailVerificado = true;
+      }
       const savedUsuario = await queryRunner.manager.save(usuario);
 
       const empleado = new Empleado();
       empleado.sucursal = savedSucursal;
-      empleado.nombre = dto.nombre;
-      empleado.apellido = dto.apellido ?? undefined;
-      empleado.email = dto.email.toLowerCase();
-      empleado.telefono = dto.telefono ?? undefined;
+      empleado.nombre = datos.nombre;
+      empleado.apellido = datos.apellido ?? undefined;
+      empleado.email = datos.email;
+      empleado.telefono = datos.telefono ?? undefined;
       empleado.activo = true;
       empleado.fechaCreacion = new Date();
       await queryRunner.manager.save(empleado);
 
       await queryRunner.commitTransaction();
 
-      // En segundo plano: un fallo de envío no afecta el registro, y el usuario
-      // puede pedir otro correo con POST /auth/reenviar-verificacion.
-      void this.cuentaCorreos.enviarVerificacion(
-        { nombre: savedUsuario.nombre, email: savedUsuario.email },
-        tokenVerificacion.token,
-      );
-
-      const payload = {
-        sub: savedUsuario.id,
-        email: savedUsuario.email,
-        rolId: 1,
-        empresaId: savedEmpresa.id,
-        sucursalId: savedSucursal.id,
-        tokenVersion: 0,
-      };
-      const accessToken = this.jwtService.sign(payload);
-
-      const savedEmpleado = await this.empleadoRepo.findOne({
-        where: {
-          email: dto.email.toLowerCase(),
-          sucursal: { empresa: { id: savedEmpresa.id } },
-        },
-        relations: { sucursal: { empresa: true } },
-      });
-
-      return {
-        accessToken,
-        user: {
-          id: savedUsuario.id,
-          nombre: savedUsuario.nombre,
-          apellido: savedUsuario.apellido,
-          email: savedUsuario.email,
-          rolId: 1,
-          emailVerificado: false,
-          empleado: savedEmpleado
-            ? {
-                id: savedEmpleado.id,
-                nombre: savedEmpleado.nombre,
-                apellido: savedEmpleado.apellido,
-                email: savedEmpleado.email,
-                telefono: savedEmpleado.telefono,
-                foto: savedEmpleado.foto,
-                sucursal: savedEmpleado.sucursal
-                  ? {
-                      id: savedEmpleado.sucursal.id,
-                      nombre: savedEmpleado.sucursal.nombre,
-                      direccion: savedEmpleado.sucursal.direccion,
-                      empresa: savedEmpleado.sucursal.empresa
-                        ? {
-                            id: savedEmpleado.sucursal.empresa.id,
-                            nombre: savedEmpleado.sucursal.empresa.nombre,
-                            slug: savedEmpleado.sucursal.empresa.slug,
-                          }
-                        : null,
-                    }
-                  : null,
-              }
-            : null,
-        },
-      };
+      return { usuario: savedUsuario, sucursalId: savedSucursal.id };
     } catch (error) {
       await queryRunner.rollbackTransaction();
 
       if (error instanceof ConflictException) {
         throw error;
+      }
+      // Dos registros simultáneos con el mismo email o cuenta de Google.
+      if (esViolacionUnica(error)) {
+        throw new ConflictException(MENSAJE_EMAIL_REGISTRADO);
       }
       // El detalle queda en el log del servidor; al cliente no se le filtra.
       this.logger.error(
@@ -217,42 +344,15 @@ export class AuthService {
     }
   }
 
-  private async findEstado(
-    manager: EntityManager,
-    tipo: string,
-    nombre: string,
-  ): Promise<Estado> {
-    const estado = await manager.findOne(Estado, { where: { tipo, nombre } });
-    if (!estado) {
-      throw new InternalServerErrorException(
-        `No existe el estado '${nombre}' de tipo '${tipo}'`,
-      );
-    }
-    return estado;
-  }
-
-  async login(dto: LoginDto) {
-    const user = await this.usuarioRepo.findOne({
-      where: { email: dto.email.toLowerCase() },
-      relations: { rol: true, empresa: true },
-    });
-    if (!user) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const passwordMatch = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!passwordMatch) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    if (!user.activo) {
-      throw new UnauthorizedException('Cuenta desactivada');
-    }
-
+  /**
+   * JWT y datos del usuario que devuelven el login, el registro y Google.
+   * `sucursalId` es la sucursal recién creada, por si el empleado aún no se lee.
+   */
+  private async construirRespuesta(user: Usuario, sucursalId?: number) {
     // Acotado a su empresa: otra empresa podría crear un empleado con este mismo email.
     const empleado = await this.empleadoRepo.findOne({
       where: {
-        email: dto.email.toLowerCase(),
+        email: user.email,
         sucursal: { empresa: { id: user.empresa?.id } },
       },
       relations: { sucursal: { empresa: true } },
@@ -263,7 +363,7 @@ export class AuthService {
       email: user.email,
       rolId: user.rol?.id,
       empresaId: user.empresa?.id,
-      sucursalId: empleado?.sucursal?.id,
+      sucursalId: empleado?.sucursal?.id ?? sucursalId,
       tokenVersion: user.tokenVersion,
     };
 
@@ -304,9 +404,24 @@ export class AuthService {
     };
   }
 
+  private async findEstado(
+    manager: EntityManager,
+    tipo: string,
+    nombre: string,
+  ): Promise<Estado> {
+    const estado = await manager.findOne(Estado, { where: { tipo, nombre } });
+    if (!estado) {
+      throw new InternalServerErrorException(
+        `No existe el estado '${nombre}' de tipo '${tipo}'`,
+      );
+    }
+    return estado;
+  }
+
   /** El slug es único y no puede quedar vacío (p. ej. un nombre solo con símbolos). */
   private async generateUniqueSlug(text: string): Promise<string> {
-    const base = this.generateSlug(text).slice(0, 90).replace(/-$/, '') || 'empresa';
+    const base =
+      this.generateSlug(text).slice(0, 90).replace(/-$/, '') || 'empresa';
     const manager = this.dataSource.manager;
     const enUso = async (slug: string) =>
       (await manager.existsBy(Empresa, { slug })) ||
@@ -322,10 +437,18 @@ export class AuthService {
     return text
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9\s-]/g, '')
       .replace(/\s+/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '');
   }
+}
+
+/** SQL Server: 2627 = restricción UNIQUE, 2601 = índice único. */
+function esViolacionUnica(error: unknown): boolean {
+  const driver = (error as { driverError?: { number?: number } })?.driverError;
+  const numero =
+    driver?.number ?? (error as { number?: number } | null)?.number;
+  return numero === 2627 || numero === 2601;
 }

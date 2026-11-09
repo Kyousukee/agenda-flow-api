@@ -15,6 +15,8 @@ import { LoginDto } from './dto/login.dto';
 import { VerificarEmailDto } from './dto/verificar-email.dto';
 import { OlvideContrasenaDto } from './dto/olvide-contrasena.dto';
 import { RestablecerContrasenaDto } from './dto/restablecer-contrasena.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
+import { GoogleRegistroDto } from './dto/google-registro.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
 
@@ -37,6 +39,22 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
+  }
+
+  /** SPEC 05: inicia sesión con Google o responde `requiereRegistro`. */
+  @Post('google')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async loginGoogle(@Body() dto: GoogleLoginDto) {
+    return this.authService.loginGoogle(dto.credential);
+  }
+
+  /** SPEC 05: crea la cuenta con Google y los datos del negocio. */
+  @Post('google/registro')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.CREATED)
+  async registroGoogle(@Body() dto: GoogleRegistroDto) {
+    return this.authService.registroGoogle(dto);
   }
 
   @Post('verificar-email')

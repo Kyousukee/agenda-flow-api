@@ -286,6 +286,54 @@ Response `200`:
 - Deja el email verificado y cierra todas las sesiones: los JWT anteriores responden `401`.
 - No inicia sesión: hay que llamar a `POST /auth/login`.
 - Response `400` si el token no existe, venció (1 hora), ya se usó o la cuenta está desactivada: `El enlace no es válido o venció`.
+- También sirve para que una cuenta creada con Google cree su primera contraseña.
+
+**Login con Google** (ver `specs/05-login-google.md`)
+
+| Método | Endpoint | Auth | Rol | Descripción |
+|--------|----------|------|-----|-------------|
+| POST | `/auth/google` | No | - | Inicia sesión con el ID token de Google |
+| POST | `/auth/google/registro` | No | - | Crea la cuenta con Google y los datos del negocio |
+
+`credential` es el ID token que entrega Google Identity Services al front. Ambas rutas tienen el límite de 5 peticiones por minuto por IP. Si la API no tiene `GOOGLE_CLIENT_ID`, responden `503`.
+
+**POST `/auth/google`**
+
+Request:
+```json
+{ "credential": "eyJhbGciOiJSUzI1NiIs..." }
+```
+
+Response `200` si la cuenta existe: el mismo cuerpo que `POST /auth/login` (`accessToken` y `user`).
+
+- Si el email ya tenía cuenta con contraseña, la vincula a Google y la marca verificada.
+- Si esa cuenta no estaba verificada, se borra su contraseña y se cierran sus sesiones (se puede crear otra con "olvidé mi contraseña").
+
+Response `200` si no hay cuenta (no inicia sesión):
+```json
+{
+  "requiereRegistro": true,
+  "perfil": { "email": "ana@gmail.com", "nombre": "Ana", "apellido": "Pérez" }
+}
+```
+
+Errores: `401` si el token no es válido, venció, es de otra app o el email no está verificado por Google; `401 Cuenta desactivada`; `409` si el email ya está vinculado a otra cuenta de Google.
+
+**POST `/auth/google/registro`**
+
+Request: `credential` más los datos del negocio y la sucursal de `POST /auth/register` (`empresaNombre` obligatorio). No lleva `email` ni `password`: el email sale del token. `nombre` y `apellido` son opcionales; por defecto se usan los de Google.
+```json
+{
+  "credential": "eyJhbGciOiJSUzI1NiIs...",
+  "empresaNombre": "Barbería Central",
+  "sucursalNombre": "Casa matriz",
+  "telefono": "+56912345678"
+}
+```
+
+Response `201`: el mismo cuerpo que `POST /auth/register`, con `user.emailVerificado = true`. No envía correo de verificación.
+
+Errores: `401` como en `/auth/google`; `409` si ya existe una cuenta con ese email o esa cuenta de Google.
 
 ---
 

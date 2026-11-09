@@ -5,6 +5,8 @@ import { CuentaCorreosService } from '../correos/cuenta-correos.service';
 import { Empleado } from '../empleados/entities/empleado.entity';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { AuthService } from './auth.service';
+import { GoogleAuthService, PerfilGoogle } from './google-auth.service';
+import { GoogleRegistroDto } from './dto/google-registro.dto';
 import { RegisterDto } from './dto/register.dto';
 import { VIGENCIA_VERIFICACION_MS, hashToken } from './token-cuenta';
 
@@ -14,6 +16,13 @@ const dto = {
   password: 'secreto123',
   empresaNombre: 'Barbería Central',
 } as RegisterDto;
+
+const perfilGoogle: PerfilGoogle = {
+  sub: 'google-123',
+  email: 'ana@correo.cl',
+  nombre: 'Ana',
+  apellido: 'Pérez',
+};
 
 function preparar(opciones: { fallaCommit?: boolean } = {}) {
   const orden: string[] = [];
@@ -45,9 +54,14 @@ function preparar(opciones: { fallaCommit?: boolean } = {}) {
   });
   const sign = jest.fn((_payload: Record<string, unknown>) => 'jwt-firmado');
   const usuarioFindOne = jest.fn(() => Promise.resolve(null as unknown));
+  const usuarioUpdate = jest.fn(() => Promise.resolve({ affected: 1 }));
+  const verificarGoogle = jest.fn(() => Promise.resolve(perfilGoogle));
 
   const servicio = new AuthService(
-    { findOne: usuarioFindOne } as unknown as Repository<Usuario>,
+    {
+      findOne: usuarioFindOne,
+      update: usuarioUpdate,
+    } as unknown as Repository<Usuario>,
     {
       findOne: jest.fn(() => Promise.resolve(null)),
     } as unknown as Repository<Empleado>,
@@ -57,6 +71,7 @@ function preparar(opciones: { fallaCommit?: boolean } = {}) {
     } as unknown as DataSource,
     { sign } as unknown as JwtService,
     { enviarVerificacion } as unknown as CuentaCorreosService,
+    { verificar: verificarGoogle } as unknown as GoogleAuthService,
   );
 
   const usuarioGuardado = () =>
@@ -68,6 +83,8 @@ function preparar(opciones: { fallaCommit?: boolean } = {}) {
     enviarVerificacion,
     sign,
     usuarioFindOne,
+    usuarioUpdate,
+    verificarGoogle,
     usuarioGuardado,
   };
 }
@@ -164,5 +181,165 @@ describe('AuthService', () => {
         expect(sign.mock.calls[0][0]).toMatchObject({ tokenVersion: 3 });
       },
     );
+
+    it('rechaza la contraseña en una cuenta creada con Google', async () => {
+      const { servicio, usuarioFindOne } = preparar();
+      usuarioFindOne.mockResolvedValue({
+        id: 1,
+        email: 'ana@correo.cl',
+        passwordHash: null,
+        activo: true,
+      });
+
+      await expect(
+        servicio.login({ email: 'ana@correo.cl', password: 'secreto123' }),
+      ).rejects.toThrow('Credenciales inválidas');
+    });
+  });
+
+  describe('loginGoogle', () => {
+    const cuenta = (extra: Partial<Usuario> = {}) =>
+      ({
+        id: 7,
+        nombre: 'Ana',
+        email: 'ana@correo.cl',
+        passwordHash: 'hash',
+        activo: true,
+        emailVerificado: true,
+        tokenVersion: 2,
+        rol: { id: 1 },
+        empresa: { id: 1 },
+        ...extra,
+      }) as unknown as Usuario;
+
+    it('inicia sesión si la cuenta de Google ya está vinculada', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate, sign } = preparar();
+      usuarioFindOne.mockResolvedValueOnce(cuenta());
+
+      const respuesta = await servicio.loginGoogle('credential');
+
+      expect(respuesta).toMatchObject({ accessToken: 'jwt-firmado' });
+      expect(usuarioUpdate).not.toHaveBeenCalled();
+      expect(sign.mock.calls[0][0]).toMatchObject({ sub: 7, tokenVersion: 2 });
+    });
+
+    it('vincula una cuenta verificada con el mismo email sin tocar la contraseña', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate } = preparar();
+      usuarioFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(cuenta());
+
+      await servicio.loginGoogle('credential');
+
+      const [criterio, cambios] = usuarioUpdate.mock.calls[0] as unknown as [
+        { id: number },
+        Partial<Usuario>,
+      ];
+      expect(criterio.id).toBe(7);
+      expect(cambios).toMatchObject({
+        googleId: 'google-123',
+        emailVerificado: true,
+      });
+      expect(cambios).not.toHaveProperty('passwordHash');
+    });
+
+    it('al vincular una cuenta sin verificar borra la contraseña y cierra sesiones', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate, sign } = preparar();
+      usuarioFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(cuenta({ emailVerificado: false }));
+
+      const respuesta = await servicio.loginGoogle('credential');
+
+      const cambios = (usuarioUpdate.mock.calls[0] as unknown[])[1];
+      expect(cambios).toMatchObject({ passwordHash: null, tokenVersion: 3 });
+      expect(respuesta).toMatchObject({ user: { emailVerificado: true } });
+      expect(sign.mock.calls[0][0]).toMatchObject({ tokenVersion: 3 });
+    });
+
+    it('no reemplaza otra cuenta de Google ya vinculada', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate } = preparar();
+      usuarioFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(cuenta());
+      usuarioUpdate.mockResolvedValue({ affected: 0 });
+
+      await expect(servicio.loginGoogle('credential')).rejects.toThrow(
+        'vinculado a otra cuenta de Google',
+      );
+    });
+
+    it('pide registro si no existe la cuenta', async () => {
+      const { servicio, sign } = preparar();
+
+      const respuesta = await servicio.loginGoogle('credential');
+
+      expect(respuesta).toEqual({
+        requiereRegistro: true,
+        perfil: { email: 'ana@correo.cl', nombre: 'Ana', apellido: 'Pérez' },
+      });
+      expect(sign).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una cuenta desactivada', async () => {
+      const { servicio, usuarioFindOne } = preparar();
+      usuarioFindOne.mockResolvedValueOnce(cuenta({ activo: false }));
+
+      await expect(servicio.loginGoogle('credential')).rejects.toThrow(
+        'Cuenta desactivada',
+      );
+    });
+
+    it('propaga el rechazo del token de Google', async () => {
+      const { servicio, verificarGoogle } = preparar();
+      verificarGoogle.mockRejectedValue(new Error('token inválido'));
+
+      await expect(servicio.loginGoogle('credential')).rejects.toThrow(
+        'token inválido',
+      );
+    });
+  });
+
+  describe('registroGoogle', () => {
+    const dtoGoogle = {
+      credential: 'credential',
+      empresaNombre: 'Barbería Central',
+    } as GoogleRegistroDto;
+
+    it('crea la cuenta verificada, sin contraseña y sin enviar correo', async () => {
+      const { servicio, usuarioGuardado, enviarVerificacion } = preparar();
+
+      const respuesta = await servicio.registroGoogle(dtoGoogle);
+
+      const usuario = usuarioGuardado();
+      expect(usuario.email).toBe('ana@correo.cl');
+      expect(usuario.nombre).toBe('Ana');
+      expect(usuario.apellido).toBe('Pérez');
+      expect(usuario.googleId).toBe('google-123');
+      expect(usuario.passwordHash).toBeNull();
+      expect(usuario.emailVerificado).toBe(true);
+      expect(usuario.verificacionTokenHash).toBeUndefined();
+      expect(enviarVerificacion).not.toHaveBeenCalled();
+      expect(respuesta.accessToken).toBe('jwt-firmado');
+      expect(respuesta.user.emailVerificado).toBe(true);
+    });
+
+    it('usa el nombre del formulario si viene', async () => {
+      const { servicio, usuarioGuardado } = preparar();
+
+      await servicio.registroGoogle({ ...dtoGoogle, nombre: 'Ana María' });
+
+      expect(usuarioGuardado().nombre).toBe('Ana María');
+    });
+
+    it('rechaza si el email o la cuenta de Google ya existen', async () => {
+      const { servicio, usuarioFindOne, usuarioGuardado } = preparar();
+      usuarioFindOne.mockResolvedValueOnce({ id: 1 });
+
+      await expect(servicio.registroGoogle(dtoGoogle)).rejects.toThrow(
+        'Ya existe una cuenta con este email',
+      );
+      expect(usuarioGuardado()).toBeUndefined();
+    });
   });
 });

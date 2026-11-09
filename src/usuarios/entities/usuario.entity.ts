@@ -25,8 +25,24 @@ export class Usuario {
   @Column({ type: 'nvarchar', length: 150, unique: true, name: 'Email' })
   email: string;
 
-  @Column({ type: 'nvarchar', length: 'max', name: 'PasswordHash' })
-  passwordHash: string;
+  /** NULL en las cuentas creadas con Google (SPEC 05) hasta que creen una contraseña. */
+  @Column({
+    type: 'nvarchar',
+    length: 'max',
+    nullable: true,
+    name: 'PasswordHash',
+  })
+  passwordHash: string | null;
+
+  /** El "sub" del ID token de Google. No se selecciona por defecto. */
+  @Column({
+    type: 'nvarchar',
+    length: 255,
+    nullable: true,
+    select: false,
+    name: 'GoogleId',
+  })
+  googleId?: string | null;
 
   @Column({ type: 'nvarchar', length: 20, nullable: true, name: 'Telefono' })
   telefono?: string;
