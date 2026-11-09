@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { CuentaService } from './cuenta.service';
+import { GoogleAuthService } from './google-auth.service';
 import { Usuario } from '../usuarios/entities/usuario.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
@@ -38,7 +39,7 @@ import { CorreosModule } from '../correos/correos.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, CuentaService],
+  providers: [AuthService, CuentaService, GoogleAuthService],
   // TypeOrmModule: JwtAuthGuard se resuelve en cada módulo que importa AuthModule
   // y necesita el repositorio de Usuario.
   exports: [AuthService, JwtModule, TypeOrmModule],
