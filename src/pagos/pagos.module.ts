@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Pago } from './entities/pago.entity';
+import { Reembolso } from './entities/reembolso.entity';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Estado } from '../reservas/entities/estado.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
@@ -11,6 +12,7 @@ import { ConfiguracionEmpresa } from '../configuracion-empresa/entities/configur
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { FlowModule } from '../flow/flow.module';
 import { AbonosService } from './abonos.service';
+import { ReembolsosService } from './reembolsos.service';
 import { PagosFlowController } from './pagos-flow.controller';
 import { CorreosModule } from '../correos/correos.module';
 
@@ -18,6 +20,7 @@ import { CorreosModule } from '../correos/correos.module';
   imports: [
     TypeOrmModule.forFeature([
       Pago,
+      Reembolso,
       Reserva,
       Estado,
       Sucursal,
@@ -29,7 +32,7 @@ import { CorreosModule } from '../correos/correos.module';
     CorreosModule,
   ],
   controllers: [PagosController, PagosFlowController],
-  providers: [PagosService, AbonosService],
-  exports: [AbonosService],
+  providers: [PagosService, AbonosService, ReembolsosService],
+  exports: [AbonosService, ReembolsosService],
 })
 export class PagosModule {}

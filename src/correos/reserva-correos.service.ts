@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Reserva } from '../reservas/entities/reserva.entity';
@@ -15,12 +16,22 @@ import {
   formatearFecha,
   formatearFechaCorta,
   formatearHora,
+  formatearInstante,
   formatearPrecio,
 } from './plantillas/formato';
 import { reservaConfirmadaCliente } from './plantillas/reserva-confirmada-cliente';
+import type { CancelacionOnline } from './plantillas/reserva-confirmada-cliente';
+import { generarToken } from '../auth/token-cuenta';
+import { limiteCancelacion } from '../reservas/cancelacion';
+import { leerFrontUrl } from '../flow/token-flow';
+
+/** Valor por defecto de ConfiguracionEmpresa.TiempoCancelacionHoras. */
+const TIEMPO_CANCELACION_POR_DEFECTO = 24;
 import { reservaNuevaInterna } from './plantillas/reserva-nueva-interna';
 import { estadoReservaCliente } from './plantillas/estado-reserva-cliente';
 import { estadoReservaEmpleado } from './plantillas/estado-reserva-empleado';
+import { cancelacionCliente } from './plantillas/cancelacion-cliente';
+import { reembolsoRechazadoInterno } from './plantillas/reembolso-rechazado-interno';
 
 interface ContextoReservaCorreo {
   marca: MarcaEmpresa;
@@ -32,6 +43,12 @@ interface ContextoReservaCorreo {
   emailEmpresa: string | null;
   emailEmpleado: string | null;
   nombreEmpleado: string | null;
+  /** SPEC 07: datos sin formatear para calcular el plazo de cancelación. */
+  reservaId: number;
+  fechaReserva: string | Date;
+  horaInicioReserva: string | Date;
+  /** ConfiguracionEmpresa.TiempoCancelacionHoras (24 si no hay fila). */
+  tiempoCancelacionHoras: number;
 }
 
 /** Normaliza un email: recorta espacios y trata '' como ausente. */
@@ -55,6 +72,7 @@ function unirNoVacios(partes: Array<string | null | undefined>, sep: string) {
 @Injectable()
 export class ReservaCorreosService {
   private readonly logger = new Logger(ReservaCorreosService.name);
+  private readonly frontUrl: string;
 
   constructor(
     @InjectRepository(Reserva)
@@ -64,7 +82,11 @@ export class ReservaCorreosService {
     @InjectRepository(Usuario)
     private readonly usuarioRepo: Repository<Usuario>,
     private readonly correosService: CorreosService,
-  ) {}
+    config: ConfigService,
+  ) {
+    // Sale del entorno y nunca de la petición (como en CuentaCorreosService).
+    this.frontUrl = leerFrontUrl(config);
+  }
 
   /**
    * Reserva nueva: confirmación al cliente (si la empresa lo habilitó y hay email),
@@ -78,11 +100,12 @@ export class ReservaCorreosService {
       const envios: Promise<boolean>[] = [];
 
       if (ctx.enviarCorreoCliente && ctx.emailCliente) {
+        const cancelacion = await this.enlaceCancelacion(ctx);
         envios.push(
           this.enviar(
             ctx,
             ctx.emailCliente,
-            reservaConfirmadaCliente(ctx.marca, ctx.datos),
+            reservaConfirmadaCliente(ctx.marca, ctx.datos, cancelacion),
             ctx.emailEmpresa,
           ),
         );
@@ -156,6 +179,128 @@ export class ReservaCorreosService {
     } catch (err) {
       this.logger.error(
         `No se pudieron enviar los correos de cambio de estado de la reserva ${reservaId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * SPEC 07: el cliente canceló desde el enlace. Confirmación al cliente (con el reembolso,
+   * si hay) y aviso al local y al empleado asignado con la plantilla de cambio de estado.
+   * Nunca lanza.
+   */
+  async notificarCancelacionCliente(
+    reservaId: number,
+    montoReembolso: number | null,
+  ): Promise<void> {
+    try {
+      const ctx = await this.cargarContexto(reservaId);
+      if (!ctx) return;
+
+      const envios: Promise<boolean>[] = [];
+      if (ctx.enviarCorreoCliente && ctx.emailCliente) {
+        envios.push(
+          this.enviar(
+            ctx,
+            ctx.emailCliente,
+            cancelacionCliente(ctx.marca, ctx.datos, {
+              cancelada: true,
+              reembolso:
+                montoReembolso === null
+                  ? null
+                  : formatearPrecio(montoReembolso),
+            }),
+            ctx.emailEmpresa,
+          ),
+        );
+      }
+      if (ctx.emailEmpresa) {
+        envios.push(
+          this.enviar(
+            ctx,
+            ctx.emailEmpresa,
+            estadoReservaEmpleado(ctx.marca, ctx.datos),
+          ),
+        );
+      }
+      if (
+        ctx.emailEmpleado &&
+        !mismoEmail(ctx.emailEmpleado, ctx.emailEmpresa)
+      ) {
+        envios.push(
+          this.enviar(
+            ctx,
+            ctx.emailEmpleado,
+            estadoReservaEmpleado(ctx.marca, ctx.datos, ctx.nombreEmpleado),
+          ),
+        );
+      }
+      await Promise.all(envios);
+    } catch (err) {
+      this.logger.error(
+        `No se pudieron enviar los correos de cancelación de la reserva ${reservaId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * SPEC 07: el local reembolsó desde el panel (y quizá canceló la reserva). Solo al
+   * cliente, si la empresa le envía correos. Nunca lanza.
+   */
+  async notificarReembolso(
+    reservaId: number,
+    monto: number,
+    cancelada: boolean,
+  ): Promise<void> {
+    try {
+      const ctx = await this.cargarContexto(reservaId);
+      if (!ctx || !ctx.enviarCorreoCliente || !ctx.emailCliente) return;
+
+      await this.enviar(
+        ctx,
+        ctx.emailCliente,
+        cancelacionCliente(ctx.marca, ctx.datos, {
+          cancelada,
+          reembolso: formatearPrecio(monto),
+        }),
+        ctx.emailEmpresa,
+      );
+    } catch (err) {
+      this.logger.error(
+        `No se pudo enviar el correo de reembolso de la reserva ${reservaId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * SPEC 07: Flow rechazó un reembolso después de aceptarlo. Aviso al local para que
+   * reintente desde el panel. Nunca lanza.
+   */
+  async notificarReembolsoRechazado(
+    reservaId: number,
+    monto: number,
+    error: string | null,
+  ): Promise<void> {
+    try {
+      const ctx = await this.cargarContexto(reservaId);
+      if (!ctx) return;
+      if (!ctx.emailEmpresa) {
+        this.logger.warn(
+          `Reserva ${reservaId}: la empresa no tiene email para avisar el reembolso rechazado`,
+        );
+        return;
+      }
+      await this.enviar(
+        ctx,
+        ctx.emailEmpresa,
+        reembolsoRechazadoInterno(ctx.marca, ctx.datos, {
+          monto: formatearPrecio(monto),
+          error,
+          urlPanel: `${this.frontUrl}/admin/pagos`,
+        }),
+      );
+    } catch (err) {
+      this.logger.error(
+        `No se pudo avisar el reembolso rechazado de la reserva ${reservaId}: ${(err as Error).message}`,
       );
     }
   }
@@ -265,7 +410,45 @@ export class ReservaCorreosService {
       emailEmpresa,
       emailEmpleado: emailONull(empleado?.email),
       nombreEmpleado,
+      reservaId: reserva.id,
+      fechaReserva: reserva.fecha,
+      horaInicioReserva: reserva.horaInicio,
+      tiempoCancelacionHoras:
+        config?.tiempoCancelacionHoras ?? TIEMPO_CANCELACION_POR_DEFECTO,
     };
+  }
+
+  /**
+   * SPEC 07: genera el token del enlace público de cancelación y guarda solo su hash.
+   * Un token nuevo reemplaza al anterior (pago tardío de SPEC 06). Si el plazo ya pasó,
+   * o no se pudo guardar el hash, el correo sale sin el botón. El token nunca va al log.
+   */
+  private async enlaceCancelacion(
+    ctx: ContextoReservaCorreo,
+  ): Promise<CancelacionOnline | null> {
+    try {
+      const limite = limiteCancelacion(
+        ctx.fechaReserva,
+        ctx.horaInicioReserva,
+        ctx.tiempoCancelacionHoras,
+      );
+      if (Date.now() >= limite.getTime()) {
+        return null;
+      }
+      const { token, hash } = generarToken();
+      await this.reservaRepo.update(ctx.reservaId, {
+        tokenCancelacionHash: hash,
+      });
+      return {
+        url: `${this.frontUrl}/reserva/cancelar?token=${token}`,
+        limite: formatearInstante(limite),
+      };
+    } catch (err) {
+      this.logger.error(
+        `No se pudo generar el enlace de cancelación de la reserva ${ctx.reservaId}: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   /** Empresa.Email o, si está vacío, el del primer Usuario activo de la empresa. */
