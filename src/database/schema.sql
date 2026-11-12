@@ -76,7 +76,9 @@ IF OBJECT_ID(N'dbo.ConfiguracionEmpresa', N'U') IS NULL
 CREATE TABLE dbo.ConfiguracionEmpresa (
     Id                          INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_ConfiguracionEmpresa PRIMARY KEY,
     PermitePagoAnticipado       BIT            NOT NULL CONSTRAINT DF_ConfEmp_PermitePagoAnticipado DEFAULT 0,
-    TipoAnticipo                NVARCHAR(50)   NULL,
+    TipoAnticipo                NVARCHAR(50)   NULL
+                                CONSTRAINT CK_ConfiguracionEmpresa_TipoAnticipo
+                                CHECK (TipoAnticipo IS NULL OR TipoAnticipo IN (N'Monto', N'Porcentaje', N'Completo')),
     MontoAnticipo               DECIMAL(10,2)  NOT NULL CONSTRAINT DF_ConfEmp_MontoAnticipo DEFAULT 0,
     TiempoCancelacionHoras      INT            NOT NULL CONSTRAINT DF_ConfEmp_TiempoCancelacionHoras DEFAULT 24,
     TiempoReservaMinutos        INT            NOT NULL CONSTRAINT DF_ConfEmp_TiempoReservaMinutos DEFAULT 30,
@@ -84,6 +86,7 @@ CREATE TABLE dbo.ConfiguracionEmpresa (
     MostrarPrecios              BIT            NOT NULL CONSTRAINT DF_ConfEmp_MostrarPrecios DEFAULT 1,
     EnviarCorreo                BIT            NOT NULL CONSTRAINT DF_ConfEmp_EnviarCorreo DEFAULT 0,
     EnviarWhatsapp              BIT            NOT NULL CONSTRAINT DF_ConfEmp_EnviarWhatsapp DEFAULT 0,
+    PagoObligatorio             BIT            NOT NULL CONSTRAINT DF_ConfiguracionEmpresa_PagoObligatorio DEFAULT 1,
     EmpresaId                   INT            NULL,
     CONSTRAINT FK_ConfiguracionEmpresa_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id)
 );
@@ -304,6 +307,10 @@ CREATE TABLE dbo.Pago (
     CodigoTransaccion   NVARCHAR(100)  NULL,
     FechaPago           DATETIME2      NOT NULL,
     EstadoId            INT            NULL,
+    CuentaFlowId        INT            NULL,  -- cuenta que firmó el cobro; NULL = pago manual del panel (SPEC 06)
+    FlowToken           NVARCHAR(100)  NULL,
+    FlowOrder           BIGINT         NULL,
+    FechaExpiracion     DATETIME2      NULL,  -- fin de la retención de la hora
     CONSTRAINT FK_Pago_Reserva FOREIGN KEY (ReservaId) REFERENCES dbo.Reserva(Id),
     CONSTRAINT FK_Pago_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
 );
@@ -336,6 +343,69 @@ IF COL_LENGTH('dbo.Empleado', 'DesactivadoPorSuscripcion') IS NULL
 IF COL_LENGTH('dbo.Servicio', 'DesactivadoPorSuscripcion') IS NULL
     ALTER TABLE dbo.Servicio ADD DesactivadoPorSuscripcion BIT NOT NULL
         CONSTRAINT DF_Servicio_DesactSusc DEFAULT 0;
+GO
+
+/* ---------------------------------------------------------------------
+   Pagos con Flow (SPEC 06 - ver migrations/005-pagos-flow.sql)
+   --------------------------------------------------------------------- */
+
+IF OBJECT_ID(N'dbo.CuentaFlow', N'U') IS NULL
+CREATE TABLE dbo.CuentaFlow (
+    Id                 INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_CuentaFlow PRIMARY KEY,
+    EmpresaId          INT            NOT NULL,
+    SucursalId         INT            NULL,      -- NULL = cuenta de la empresa
+    ApiKey             NVARCHAR(100)  NOT NULL,
+    SecretKeyCifrada   NVARCHAR(500)  NOT NULL,  -- base64(iv | authTag | cifrado)
+    FechaCreacion      DATETIME2      NOT NULL CONSTRAINT DF_CuentaFlow_FechaCreacion DEFAULT GETDATE(),
+    FechaActualizacion DATETIME2      NULL,
+    FechaBaja          DATETIME2      NULL,      -- baja lógica: los pagos antiguos se siguen verificando con estas credenciales
+    CONSTRAINT FK_CuentaFlow_Empresa  FOREIGN KEY (EmpresaId)  REFERENCES dbo.Empresa(Id),
+    CONSTRAINT FK_CuentaFlow_Sucursal FOREIGN KEY (SucursalId) REFERENCES dbo.Sucursal(id)
+);
+GO
+
+-- Una sola cuenta vigente (FechaBaja IS NULL) por empresa y por sucursal.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_CuentaFlow_Empresa')
+CREATE UNIQUE INDEX UX_CuentaFlow_Empresa
+    ON dbo.CuentaFlow(EmpresaId) WHERE SucursalId IS NULL AND FechaBaja IS NULL;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_CuentaFlow_Sucursal')
+CREATE UNIQUE INDEX UX_CuentaFlow_Sucursal
+    ON dbo.CuentaFlow(SucursalId) WHERE SucursalId IS NOT NULL AND FechaBaja IS NULL;
+GO
+
+IF OBJECT_ID(N'dbo.FK_Pago_CuentaFlow', N'F') IS NULL
+ALTER TABLE dbo.Pago ADD CONSTRAINT FK_Pago_CuentaFlow
+    FOREIGN KEY (CuentaFlowId) REFERENCES dbo.CuentaFlow(Id);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Pago_FlowToken')
+CREATE UNIQUE INDEX UX_Pago_FlowToken
+    ON dbo.Pago(FlowToken) WHERE FlowToken IS NOT NULL;
+GO
+
+IF OBJECT_ID(N'dbo.PagoSuscripcion', N'U') IS NULL
+CREATE TABLE dbo.PagoSuscripcion (
+    Id              INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_PagoSuscripcion PRIMARY KEY,
+    EmpresaId       INT            NOT NULL,
+    Monto           DECIMAL(10,2)  NOT NULL,
+    Dias            INT            NOT NULL,
+    EstadoId        INT            NOT NULL,     -- Estado tipo 'Pago'
+    FlowToken       NVARCHAR(100)  NULL,
+    FlowOrder       BIGINT         NULL,
+    FechaCreacion   DATETIME2      NOT NULL CONSTRAINT DF_PagoSuscripcion_FechaCreacion DEFAULT GETDATE(),
+    FechaPago       DATETIME2      NULL,
+    FinAnterior     DATETIME2      NULL,         -- FechaFin antes de extender (auditoría)
+    FinNuevo        DATETIME2      NULL,         -- FechaFin después de extender
+    CONSTRAINT FK_PagoSuscripcion_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id),
+    CONSTRAINT FK_PagoSuscripcion_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
+);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_PagoSuscripcion_FlowToken')
+CREATE UNIQUE INDEX UX_PagoSuscripcion_FlowToken
+    ON dbo.PagoSuscripcion(FlowToken) WHERE FlowToken IS NOT NULL;
 GO
 
 /* ---------------------------------------------------------------------

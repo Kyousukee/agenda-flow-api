@@ -29,9 +29,12 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesService } from '../suscripciones/suscripciones.service';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
+import { AbonosService } from '../pagos/abonos.service';
+import type { CobroAbono, PagoIniciado } from '../pagos/abonos.service';
+import { calcularAbono } from '../pagos/abonos';
+import { Pago } from '../pagos/entities/pago.entity';
+import { ESTADOS_QUE_LIBERAN, horaOcupada } from '../reservas/disponibilidad';
 
-/** Estados de reserva que dejan la hora libre. */
-const ESTADOS_QUE_LIBERAN = ['Cancelada', 'Rechazado', 'Anulado'];
 /** Error de SQL Server cuando la transacción pierde un interbloqueo. */
 const MSSQL_DEADLOCK = 1205;
 
@@ -80,6 +83,7 @@ export class ReservarService {
     private readonly dataSource: DataSource,
     private readonly suscripcionesService: SuscripcionesService,
     private readonly reservaCorreos: ReservaCorreosService,
+    private readonly abonos: AbonosService,
   ) {}
 
   async getEmpresaBySlug(slug: string) {
@@ -87,7 +91,14 @@ export class ReservarService {
 
     // SPEC 01: la carga de la página pública también resuelve la suscripción,
     // así el excedente de una prueba vencida se oculta aunque el dueño no entre.
-    await this.suscripcionesService.obtenerVigente(empresa.id);
+    const suscripcion = await this.suscripcionesService.obtenerVigente(
+      empresa.id,
+    );
+    // SPEC 06: configuración de cobro al reservar.
+    const { publico } = await this.abonos.resolverPagoOnline(
+      empresa.id,
+      suscripcion,
+    );
 
     return {
       id: empresa.id,
@@ -95,6 +106,7 @@ export class ReservarService {
       nombreComercial: empresa.nombreComercial,
       slug: empresa.slug,
       logo: empresa.logo,
+      pagoOnline: publico,
     };
   }
 
@@ -134,10 +146,13 @@ export class ReservarService {
   }
 
   async getServiciosByEmpresa(empresaId: number) {
-    const servicios = await this.servicioRepo.find({
-      where: { empresa: { id: empresaId }, activo: true },
-      order: { nombre: 'ASC' },
-    });
+    const [servicios, { config }] = await Promise.all([
+      this.servicioRepo.find({
+        where: { empresa: { id: empresaId }, activo: true },
+        order: { nombre: 'ASC' },
+      }),
+      this.abonos.resolverPagoOnline(empresaId),
+    ]);
     return servicios.map((s) => ({
       id: s.id,
       nombre: s.nombre,
@@ -145,6 +160,8 @@ export class ReservarService {
       duracionMinutos: s.duracionMinutos,
       precio: s.precio,
       color: s.color,
+      // SPEC 06: lo que se cobra al reservar; null si no se cobra.
+      abono: config ? calcularAbono(s.precio, config) : null,
     }));
   }
 
@@ -201,8 +218,15 @@ export class ReservarService {
     }));
   }
 
+  /** SPEC 06: resultado del pago online de una reserva, para la página de retorno del front. */
+  getEstadoPago(codigo: string) {
+    return this.abonos.estadoPagoDeReserva(codigo);
+  }
+
   /** Lo único que la página pública necesita saber de las reservas: qué horas están tomadas. */
   async getOcupacionBySucursal(sucursalId: number) {
+    // SPEC 06: libera las horas retenidas por pagos que no se confirmaron a tiempo.
+    await this.abonos.anularVencidos(sucursalId);
     const reservas = await this.reservaRepo.find({
       where: {
         sucursal: { id: sucursalId },
@@ -225,49 +249,90 @@ export class ReservarService {
       throw new BadRequestException('La fecha de la reserva ya pasó');
     }
 
-    const { servicio, horaInicio, horaFin } = await this.validarReferencias(dto);
+    const { servicio, sucursal, horaInicio, horaFin } =
+      await this.validarReferencias(dto);
+
+    // SPEC 06: antes del control de solape, para que una retención vencida no bloquee la hora.
+    await this.abonos.anularVencidos(dto.sucursalId);
+
+    // SPEC 06: si se cobra el abono, la reserva nace Pendiente y retiene la hora.
+    const cobro = await this.abonos.evaluarCobro({
+      empresaId: dto.empresaId,
+      sucursalId: dto.sucursalId,
+      precio: servicio.precio,
+      pagarAhora: dto.pagarAhora,
+    });
+    if (cobro && !dto.clienteEmail) {
+      throw new BadRequestException(
+        'El email es obligatorio para pagar online',
+      );
+    }
 
     let saved: Reserva;
+    let pago: Pago | null;
     try {
       // SERIALIZABLE: dos reservas simultáneas no pueden pasar ambas el control de solape.
-      saved = await this.dataSource.transaction('SERIALIZABLE', async (manager) => {
-        if (dto.empleadoId) {
-          await this.validarHoraLibre(manager, dto, horaInicio, horaFin);
-        }
-        const cliente = await this.obtenerCliente(manager, dto);
-        const estado = await manager.findOne(Estado, {
-          where: { tipo: 'Reserva', nombre: 'Programada' },
-        });
+      ({ saved, pago } = await this.dataSource.transaction(
+        'SERIALIZABLE',
+        async (manager) => {
+          if (dto.empleadoId) {
+            await this.validarHoraLibre(manager, dto, horaInicio, horaFin);
+          }
+          const cliente = await this.obtenerCliente(manager, dto);
+          const estado = await manager.findOne(Estado, {
+            where: {
+              tipo: 'Reserva',
+              nombre: cobro ? 'Pendiente' : 'Programada',
+            },
+          });
 
-        return manager.save(
-          manager.create(Reserva, {
-            codigo: uuidv4(),
-            fecha: dto.fecha,
-            horaInicio,
-            horaFin,
-            precio: servicio.precio,
-            observacion: dto.observacion,
-            empresa: { id: dto.empresaId },
-            sucursal: { id: dto.sucursalId },
-            cliente,
-            servicio: { id: dto.servicioId },
-            empleado: dto.empleadoId ? { id: dto.empleadoId } : undefined,
-            estado: estado ?? undefined,
-          }),
-        );
-      });
+          const reserva = await manager.save(
+            manager.create(Reserva, {
+              codigo: uuidv4(),
+              fecha: dto.fecha,
+              horaInicio,
+              horaFin,
+              precio: servicio.precio,
+              observacion: dto.observacion,
+              empresa: { id: dto.empresaId },
+              sucursal: { id: dto.sucursalId },
+              cliente,
+              servicio: { id: dto.servicioId },
+              empleado: dto.empleadoId ? { id: dto.empleadoId } : undefined,
+              estado: estado ?? undefined,
+            }),
+          );
+          const pendiente = cobro
+            ? await this.abonos.registrarPendiente(manager, reserva.id, cobro)
+            : null;
+          return { saved: reserva, pago: pendiente };
+        },
+      ));
     } catch (error) {
       if (
         error instanceof QueryFailedError &&
         (error.driverError as { number?: number })?.number === MSSQL_DEADLOCK
       ) {
-        throw new ConflictException('La hora seleccionada ya no está disponible');
+        throw new ConflictException(
+          'La hora seleccionada ya no está disponible',
+        );
       }
       throw error;
     }
 
+    const pagoIniciado = await this.iniciarPago(
+      pago,
+      saved.id,
+      cobro,
+      dto,
+      `${sucursal.empresa.nombreComercial || sucursal.empresa.nombre} - ${servicio.nombre}`,
+    );
+
     // SPEC 02: correos en segundo plano; un fallo de envío no afecta la reserva.
-    void this.reservaCorreos.notificarNuevaReserva(saved.id);
+    // SPEC 06: con pago en curso, los correos salen al confirmarse el pago.
+    if (!pagoIniciado) {
+      void this.reservaCorreos.notificarNuevaReserva(saved.id);
+    }
 
     // Sin la relación `cliente`: esta respuesta es pública.
     return {
@@ -277,7 +342,29 @@ export class ReservarService {
       horaInicio: saved.horaInicio,
       horaFin: saved.horaFin,
       precio: saved.precio,
+      estado: pagoIniciado ? 'Pendiente' : 'Programada',
+      pago: pagoIniciado,
     };
+  }
+
+  /** SPEC 06: crea el cobro en Flow. null si no hay cobro o si Flow falló (fallback sin pago). */
+  private async iniciarPago(
+    pago: Pago | null,
+    reservaId: number,
+    cobro: CobroAbono | null,
+    dto: CreateReservaDto,
+    subject: string,
+  ): Promise<PagoIniciado | null> {
+    if (!pago || !cobro || !dto.clienteEmail) {
+      return null;
+    }
+    return this.abonos.iniciar({
+      pago,
+      reservaId,
+      cobro,
+      email: dto.clienteEmail,
+      subject: subject.slice(0, 200),
+    });
   }
 
   /** Comprueba que empresa, sucursal, servicio y empleado existan, estén activos y se correspondan. */
@@ -328,7 +415,12 @@ export class ReservarService {
 
     await this.validarHorarioDeAtencion(dto, inicio, fin);
 
-    return { servicio, horaInicio: aHora(inicio), horaFin: aHora(fin) };
+    return {
+      servicio,
+      sucursal,
+      horaInicio: aHora(inicio),
+      horaFin: aHora(fin),
+    };
   }
 
   /** La reserva completa debe caber en un horario abierto de la sucursal para ese día. */
@@ -360,27 +452,13 @@ export class ReservarService {
     horaInicio: string,
     horaFin: string,
   ): Promise<void> {
-    const solape = { inicio: horaInicio, fin: horaFin };
-
-    const reservas = await manager
-      .createQueryBuilder(Reserva, 'reserva')
-      .leftJoin('reserva.estado', 'estado')
-      .where('reserva.EmpleadoId = :empleadoId', { empleadoId: dto.empleadoId })
-      .andWhere('reserva.fecha = :fecha', { fecha: dto.fecha })
-      .andWhere('reserva.horaInicio < :fin AND reserva.horaFin > :inicio', solape)
-      .andWhere('(estado.nombre IS NULL OR estado.nombre NOT IN (:...libres))', {
-        libres: ESTADOS_QUE_LIBERAN,
-      })
-      .getCount();
-
-    const bloqueos = await manager
-      .createQueryBuilder(Bloqueo, 'bloqueo')
-      .where('bloqueo.EmpleadoId = :empleadoId', { empleadoId: dto.empleadoId })
-      .andWhere('bloqueo.fecha = :fecha', { fecha: dto.fecha })
-      .andWhere('bloqueo.horaInicio < :fin AND bloqueo.horaFin > :inicio', solape)
-      .getCount();
-
-    if (reservas > 0 || bloqueos > 0) {
+    const ocupada = await horaOcupada(manager, {
+      empleadoId: dto.empleadoId!,
+      fecha: dto.fecha,
+      horaInicio,
+      horaFin,
+    });
+    if (ocupada) {
       throw new ConflictException('La hora seleccionada ya no está disponible');
     }
   }

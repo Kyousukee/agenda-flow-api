@@ -1,20 +1,20 @@
-import {
-  IsString,
-  IsOptional,
-  IsNumber,
-  IsBoolean,
-  MaxLength,
-} from 'class-validator';
+import { IsOptional, IsNumber, IsBoolean, IsIn } from 'class-validator';
+import { TIPOS_ANTICIPO } from '../../pagos/abonos';
+import type { TipoAnticipo } from '../../pagos/abonos';
 
 export class UpdateConfiguracionDto {
   @IsOptional()
   @IsBoolean()
   permitePagoAnticipado?: boolean;
 
+  /** SPEC 06: si es false, el cliente elige pagar ahora o en el local. */
   @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  tipoAnticipo?: string;
+  @IsBoolean()
+  pagoObligatorio?: boolean;
+
+  @IsOptional()
+  @IsIn(TIPOS_ANTICIPO)
+  tipoAnticipo?: TipoAnticipo | null;
 
   @IsOptional()
   @IsNumber()

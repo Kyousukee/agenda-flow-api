@@ -20,6 +20,7 @@ import { ReservarModule } from './reservar/reservar.module';
 import { AuthModule } from './auth/auth.module';
 import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 import { CorreosModule } from './correos/correos.module';
+import { FlowModule } from './flow/flow.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { CorreosModule } from './correos/correos.module';
     ReservarModule,
     SuscripcionesModule,
     CorreosModule,
+    FlowModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

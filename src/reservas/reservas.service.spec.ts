@@ -1,9 +1,6 @@
 jest.mock('uuid', () => ({ v4: () => 'uuid-de-prueba' }));
 
-import {
-  BadRequestException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { ReservasService } from './reservas.service';
 import { ReservasController } from './reservas.controller';
@@ -14,6 +11,7 @@ import { Reserva } from './entities/reserva.entity';
 import { Estado } from './entities/estado.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
+import { AbonosService } from '../pagos/abonos.service';
 import { Repository } from 'typeorm';
 
 const EMPRESA = 1;
@@ -38,11 +36,13 @@ function montar(reservaEmpresa = EMPRESA, tipoEstado = 'Reserva') {
       .mockResolvedValue({ id: 10, empresa: { id: reservaEmpresa } }),
   };
   const correos = { notificarCambioEstado: jest.fn() };
+  const abonos = { anularVencidos: jest.fn().mockResolvedValue(0) };
   const service = new ReservasService(
     reservaRepo as unknown as Repository<Reserva>,
     estadoRepo as unknown as Repository<Estado>,
     sucursalRepo as unknown as Repository<Sucursal>,
     correos as unknown as ReservaCorreosService,
+    abonos as unknown as AbonosService,
   );
   return { service, reservaRepo, correos };
 }

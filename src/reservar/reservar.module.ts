@@ -15,6 +15,7 @@ import { EmpresaSlug } from '../empresas/entities/empresa-slug.entity';
 import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { CorreosModule } from '../correos/correos.module';
+import { PagosModule } from '../pagos/pagos.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { CorreosModule } from '../correos/correos.module';
     ]),
     SuscripcionesModule,
     CorreosModule,
+    PagosModule,
   ],
   controllers: [ReservarController],
   providers: [ReservarService],

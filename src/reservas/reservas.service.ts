@@ -11,6 +11,7 @@ import { Estado } from './entities/estado.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
 import { UpdateReservaEstadoDto } from './dto/update-reserva-estado.dto';
+import { AbonosService } from '../pagos/abonos.service';
 
 @Injectable()
 export class ReservasService {
@@ -22,6 +23,7 @@ export class ReservasService {
     @InjectRepository(Sucursal)
     private readonly sucursalRepo: Repository<Sucursal>,
     private readonly reservaCorreos: ReservaCorreosService,
+    private readonly abonos: AbonosService,
   ) {}
 
   async findAllBySucursal(sucursalId: number, empresaId: number) {
@@ -37,6 +39,9 @@ export class ReservasService {
         'No tienes permiso para ver las reservas de esta sucursal',
       );
     }
+
+    // SPEC 06: el panel no muestra como "Esperando pago" una retención ya vencida.
+    await this.abonos.anularVencidos(sucursalId);
 
     return this.reservaRepo.find({
       where: { sucursal: { id: sucursalId } },

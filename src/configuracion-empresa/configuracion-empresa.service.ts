@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfiguracionEmpresa } from './entities/configuracion-empresa.entity';
@@ -6,6 +10,11 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { CreateConfiguracionDto } from './dto/create-configuracion.dto';
 import { UpdateConfiguracionDto } from './dto/update-configuracion.dto';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { SuscripcionesService } from '../suscripciones/suscripciones.service';
+import { PAGOS_ONLINE_POR_PLAN } from '../suscripciones/planes';
+import { PagosOnlinePlanException } from '../suscripciones/suscripcion-limite.exception';
+import { CuentasFlowService } from '../flow/cuentas-flow.service';
+import { esTipoAnticipo } from '../pagos/abonos';
 
 const LOGO_FOLDER = 'agendaflow/logos';
 
@@ -17,6 +26,8 @@ export class ConfiguracionEmpresaService {
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly suscripcionesService: SuscripcionesService,
+    private readonly cuentasFlow: CuentasFlowService,
   ) {}
 
   async uploadLogo(file: Express.Multer.File, empresaId: number) {
@@ -70,7 +81,7 @@ export class ConfiguracionEmpresaService {
       where: { empresa: { id: empresaId } },
     });
     if (existing) {
-      return this.updateConfig(existing, dto);
+      return this.updateConfig(existing, dto, empresaId);
     }
 
     const empresa = await this.empresaRepo.findOne({
@@ -82,7 +93,8 @@ export class ConfiguracionEmpresaService {
 
     const config = this.configRepo.create({
       permitePagoAnticipado: dto.permitePagoAnticipado ?? false,
-      tipoAnticipo: dto.tipoAnticipo,
+      pagoObligatorio: dto.pagoObligatorio ?? true,
+      tipoAnticipo: dto.tipoAnticipo ?? undefined,
       montoAnticipo: dto.montoAnticipo ?? 0,
       tiempoCancelacionHoras: dto.tiempoCancelacionHoras ?? 24,
       tiempoReservaMinutos: dto.tiempoReservaMinutos ?? 30,
@@ -93,6 +105,7 @@ export class ConfiguracionEmpresaService {
       empresa,
     });
 
+    await this.validarAnticipo(config, empresaId);
     return this.configRepo.save(config);
   }
 
@@ -106,16 +119,20 @@ export class ConfiguracionEmpresaService {
       );
     }
 
-    return this.updateConfig(config, dto);
+    return this.updateConfig(config, dto, empresaId);
   }
 
   private async updateConfig(
     config: ConfiguracionEmpresa,
     dto: UpdateConfiguracionDto,
+    empresaId: number,
   ) {
     Object.assign(config, {
       ...(dto.permitePagoAnticipado !== undefined && {
         permitePagoAnticipado: dto.permitePagoAnticipado,
+      }),
+      ...(dto.pagoObligatorio !== undefined && {
+        pagoObligatorio: dto.pagoObligatorio,
       }),
       ...(dto.tipoAnticipo !== undefined && { tipoAnticipo: dto.tipoAnticipo }),
       ...(dto.montoAnticipo !== undefined && {
@@ -141,6 +158,60 @@ export class ConfiguracionEmpresaService {
       }),
     });
 
+    await this.validarAnticipo(config, empresaId);
     return this.configRepo.save(config);
+  }
+
+  /**
+   * SPEC 06: reglas cuando la configuración queda con PermitePagoAnticipado = true.
+   * Se valida el resultado final (lo guardado + el cambio), no solo el body.
+   */
+  private async validarAnticipo(
+    config: ConfiguracionEmpresa,
+    empresaId: number,
+  ): Promise<void> {
+    if (!config.permitePagoAnticipado) {
+      return;
+    }
+
+    const tipo = config.tipoAnticipo;
+    if (!esTipoAnticipo(tipo)) {
+      throw new BadRequestException(
+        'Elige el tipo de anticipo: Monto, Porcentaje o Completo',
+      );
+    }
+    const monto = Number(config.montoAnticipo);
+    if (tipo === 'Monto' && !(Number.isInteger(monto) && monto >= 1)) {
+      throw new BadRequestException(
+        'El monto del anticipo debe ser un número entero de pesos mayor o igual a 1',
+      );
+    }
+    if (
+      tipo === 'Porcentaje' &&
+      !(Number.isInteger(monto) && monto >= 1 && monto <= 100)
+    ) {
+      throw new BadRequestException(
+        'El porcentaje del anticipo debe ser un número entero entre 1 y 100',
+      );
+    }
+
+    const suscripcion =
+      await this.suscripcionesService.obtenerVigente(empresaId);
+    if (!PAGOS_ONLINE_POR_PLAN[suscripcion.plan]) {
+      throw new PagosOnlinePlanException(suscripcion.plan);
+    }
+
+    const sinCuenta = await this.cuentasFlow.sucursalesSinCuenta(empresaId);
+    if (sinCuenta.length > 0) {
+      const nombres = sinCuenta
+        .map((s) => s.nombre ?? `Sucursal ${s.id}`)
+        .join(', ');
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: `Configura una cuenta Flow para el negocio o para estas sucursales: ${nombres}`,
+        sucursalesSinCuenta: sinCuenta,
+      });
+    }
   }
 }

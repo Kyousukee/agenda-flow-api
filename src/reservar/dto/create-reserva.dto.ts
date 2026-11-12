@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsISO8601,
   IsNotEmpty,
@@ -54,4 +55,9 @@ export class CreateReservaDto {
   @IsString()
   @MaxLength(20)
   clienteTelefono?: string;
+
+  /** SPEC 06: solo se usa si la empresa tiene el pago opcional (PagoObligatorio = 0). */
+  @IsOptional()
+  @IsBoolean()
+  pagarAhora?: boolean;
 }

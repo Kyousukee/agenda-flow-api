@@ -6,12 +6,16 @@ import { ConfiguracionEmpresaController } from './configuracion-empresa.controll
 import { ConfiguracionEmpresaService } from './configuracion-empresa.service';
 import { AuthModule } from '../auth/auth.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
+import { FlowModule } from '../flow/flow.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ConfiguracionEmpresa, Empresa]),
     AuthModule,
     CloudinaryModule,
+    SuscripcionesModule,
+    FlowModule,
   ],
   controllers: [ConfiguracionEmpresaController],
   providers: [ConfiguracionEmpresaService],

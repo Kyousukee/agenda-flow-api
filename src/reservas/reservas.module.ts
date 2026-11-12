@@ -7,12 +7,14 @@ import { ReservasController } from './reservas.controller';
 import { ReservasService } from './reservas.service';
 import { AuthModule } from '../auth/auth.module';
 import { CorreosModule } from '../correos/correos.module';
+import { PagosModule } from '../pagos/pagos.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Reserva, Estado, Sucursal]),
     AuthModule,
     CorreosModule,
+    PagosModule,
   ],
   controllers: [ReservasController],
   providers: [ReservasService],
