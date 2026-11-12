@@ -38,6 +38,16 @@ export class Reserva {
   @Column({ type: 'text', nullable: true, name: 'Observacion' })
   observacion?: string;
 
+  /** SPEC 07: SHA-256 del token del enlace público de cancelación. Nunca se devuelve. */
+  @Column({
+    type: 'nvarchar',
+    length: 64,
+    nullable: true,
+    select: false,
+    name: 'TokenCancelacionHash',
+  })
+  tokenCancelacionHash?: string | null;
+
   @CreateDateColumn({ type: 'datetime2', name: 'FechaCreacion' })
   fechaCreacion: Date;
 

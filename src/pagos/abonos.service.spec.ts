@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadGatewayException, NotFoundException } from '@nestjs/common';
 import { AbonosService, METODO_PAGO_FLOW } from './abonos.service';
 import type { CobroAbono } from './abonos.service';
 import { Pago } from './entities/pago.entity';
@@ -260,6 +260,7 @@ describe('AbonosService.procesarToken (webhooks de Flow)', () => {
       pago?: unknown;
       cuenta?: CuentaFlow | null;
       empleado?: unknown;
+      paymentData?: unknown;
     } = {},
   ) {
     const afectados = [...(opciones.afectados ?? [1, 1])];
@@ -354,7 +355,16 @@ describe('AbonosService.procesarToken (webhooks de Flow)', () => {
         amount: opciones.amount ?? 4500,
         commerceOrder: opciones.commerceOrder ?? 'R-77',
         flowOrder: 999,
-        paymentData: { date: '2026-11-10 12:30:00' },
+        paymentData:
+          'paymentData' in opciones
+            ? opciones.paymentData
+            : {
+                date: '2026-11-10 12:30:00',
+                amount: '4500',
+                fee: '149',
+                taxes: '28',
+                balance: '4323',
+              },
       }),
     };
     const correos = { notificarNuevaReserva: jest.fn() };
@@ -389,6 +399,7 @@ describe('AbonosService.procesarToken (webhooks de Flow)', () => {
       distintoDe: 'Pago-Pagado',
     });
     expect(updates[0].set.fechaPago).toEqual(new Date('2026-11-10T12:30:00'));
+    expect(updates[0].set.montoNeto).toBe(4323);
     expect(estadoDe(updates[1])).toBe('Reserva-Programada');
     expect(updates[1].params).toMatchObject({
       id: 5,
@@ -399,6 +410,17 @@ describe('AbonosService.procesarToken (webhooks de Flow)', () => {
       codigoReserva: 'codigo-reserva',
       estadoPago: 'Pagado',
     });
+  });
+
+  it('si Flow no informa balance, confirma igual sin tocar MontoNeto', async () => {
+    const { service, updates } = montarWebhook({
+      paymentData: { date: '2026-11-10 12:30:00' },
+    });
+
+    await service.procesarToken('TOK');
+
+    expect(estadoDe(updates[0])).toBe('Pago-Pagado');
+    expect(updates[0].set).not.toHaveProperty('montoNeto');
   });
 
   it('doble confirmación: el segundo aviso no cambia nada ni repite los correos', async () => {
@@ -661,5 +683,124 @@ describe('AbonosService.anularVencidos y estadoPagoDeReserva', () => {
     await expect(service.estadoPagoDeReserva('codigo')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+});
+
+describe('AbonosService.asegurarMontoNeto (SPEC 07)', () => {
+  function montarNeto(
+    opciones: { obtenerEstado?: jest.Mock; cuenta?: CuentaFlow | null } = {},
+  ) {
+    const pagoRepo = { update: jest.fn().mockResolvedValue(undefined) };
+    const cuentasFlow = {
+      buscarPorId: jest
+        .fn()
+        .mockResolvedValue('cuenta' in opciones ? opciones.cuenta : CUENTA),
+      credenciales: jest
+        .fn()
+        .mockReturnValue({ apiKey: 'KEY', secretKey: 'SECRET' }),
+    };
+    const flow = {
+      obtenerEstado:
+        opciones.obtenerEstado ??
+        jest.fn().mockResolvedValue({
+          status: 2,
+          amount: 4500,
+          commerceOrder: 'R-77',
+          flowOrder: 999,
+          paymentData: { balance: '4323' },
+        }),
+    };
+    const service = new AbonosService(
+      {} as never,
+      pagoRepo as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { disponible: true } as never,
+      cuentasFlow as never,
+      flow as never,
+      {} as never,
+    );
+    return { service, pagoRepo, flow, cuentasFlow };
+  }
+
+  const pagoSinNeto = () =>
+    ({
+      id: 77,
+      monto: 4500,
+      cuentaFlowId: 3,
+      flowToken: 'TOK',
+      montoNeto: null,
+    }) as unknown as Pago;
+
+  it('si ya está guardado, lo devuelve sin consultar a Flow', async () => {
+    const { service, flow } = montarNeto();
+    const pago = { ...pagoSinNeto(), montoNeto: '4323.00' } as unknown as Pago;
+
+    await expect(service.asegurarMontoNeto(pago)).resolves.toBe(4323);
+    expect(flow.obtenerEstado).not.toHaveBeenCalled();
+  });
+
+  it('si falta, lo consulta con la cuenta que firmó el cobro y lo guarda', async () => {
+    const { service, flow, pagoRepo, cuentasFlow } = montarNeto();
+    const pago = pagoSinNeto();
+
+    await expect(service.asegurarMontoNeto(pago)).resolves.toBe(4323);
+    expect(cuentasFlow.buscarPorId).toHaveBeenCalledWith(3);
+    expect(flow.obtenerEstado).toHaveBeenCalledWith(
+      { apiKey: 'KEY', secretKey: 'SECRET' },
+      'TOK',
+    );
+    expect(pagoRepo.update).toHaveBeenCalledWith(77, { montoNeto: 4323 });
+    expect(pago.montoNeto).toBe(4323);
+  });
+
+  it('si Flow no informa balance, responde 502 y no guarda nada', async () => {
+    const { service, pagoRepo } = montarNeto({
+      obtenerEstado: jest.fn().mockResolvedValue({
+        status: 2,
+        amount: 4500,
+        commerceOrder: 'R-77',
+        paymentData: { date: '2026-11-10 12:30:00' },
+      }),
+    });
+
+    await expect(
+      service.asegurarMontoNeto(pagoSinNeto()),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+    expect(pagoRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('si la orden no coincide, no confía en el balance y responde 502', async () => {
+    const { service, pagoRepo } = montarNeto({
+      obtenerEstado: jest.fn().mockResolvedValue({
+        status: 2,
+        amount: 4500,
+        commerceOrder: 'R-1',
+        paymentData: { balance: '4323' },
+      }),
+    });
+
+    await expect(
+      service.asegurarMontoNeto(pagoSinNeto()),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+    expect(pagoRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('si Flow falla, responde 502', async () => {
+    const { service } = montarNeto({
+      obtenerEstado: jest.fn().mockRejectedValue(new FlowError('caído')),
+    });
+    await expect(
+      service.asegurarMontoNeto(pagoSinNeto()),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('sin la cuenta que firmó el cobro, responde 502', async () => {
+    const { service, flow } = montarNeto({ cuenta: null });
+    await expect(
+      service.asegurarMontoNeto(pagoSinNeto()),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+    expect(flow.obtenerEstado).not.toHaveBeenCalled();
   });
 });

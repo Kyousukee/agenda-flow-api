@@ -12,13 +12,15 @@ import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AbonosService } from './abonos.service';
+import { ReembolsosService } from './reembolsos.service';
 import { leerFrontUrl, leerTokenFlow } from '../flow/token-flow';
 
 /**
- * SPEC 06: webhooks de Flow para los abonos de reservas. Son públicos (los llama Flow)
- * y no confían en el body: AbonosService consulta el estado a Flow.
+ * Webhooks de Flow para los abonos de reservas (SPEC 06) y sus reembolsos (SPEC 07).
+ * Son públicos (los llama Flow) y no confían en el body: los servicios consultan el
+ * estado a Flow con las credenciales de la cuenta que firmó el cobro.
  */
-@Controller('flow/abono')
+@Controller('flow')
 @SkipThrottle()
 export class PagosFlowController {
   private readonly logger = new Logger(PagosFlowController.name);
@@ -26,13 +28,14 @@ export class PagosFlowController {
 
   constructor(
     private readonly abonos: AbonosService,
+    private readonly reembolsos: ReembolsosService,
     config: ConfigService,
   ) {
     this.frontUrl = leerFrontUrl(config);
   }
 
   /** Flow reintenta si no recibe 200: un error al consultar a Flow sale como 5xx a propósito. */
-  @Post('confirmacion')
+  @Post('abono/confirmacion')
   @HttpCode(HttpStatus.OK)
   async confirmacion(@Body('token') valor: unknown) {
     await this.abonos.procesarToken(leerTokenFlow(valor));
@@ -40,7 +43,7 @@ export class PagosFlowController {
   }
 
   /** Flow envía aquí al navegador del cliente. Se procesa igual y se redirige al front. */
-  @Post('retorno')
+  @Post('abono/retorno')
   async retorno(@Body('token') valor: unknown, @Res() res: Response) {
     const token = leerTokenFlow(valor);
     let codigo: string;
@@ -62,5 +65,13 @@ export class PagosFlowController {
       HttpStatus.SEE_OTHER,
       `${this.frontUrl}/reserva/pago?codigo=${encodeURIComponent(codigo)}`,
     );
+  }
+
+  /** SPEC 07: urlCallBack de refund/create. Un token desconocido responde 404. */
+  @Post('reembolso/confirmacion')
+  @HttpCode(HttpStatus.OK)
+  async confirmacionReembolso(@Body('token') valor: unknown) {
+    await this.reembolsos.procesarToken(leerTokenFlow(valor));
+    return { recibido: true };
   }
 }

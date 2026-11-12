@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ReservarController } from './reservar.controller';
 import { ReservarService } from './reservar.service';
+import { CancelacionPublicaService } from './cancelacion-publica.service';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
@@ -16,6 +17,8 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { CorreosModule } from '../correos/correos.module';
 import { PagosModule } from '../pagos/pagos.module';
+import { Pago } from '../pagos/entities/pago.entity';
+import { ConfiguracionEmpresa } from '../configuracion-empresa/entities/configuracion-empresa.entity';
 
 @Module({
   imports: [
@@ -31,12 +34,14 @@ import { PagosModule } from '../pagos/pagos.module';
       Estado,
       EmpresaSlug,
       Empresa,
+      Pago,
+      ConfiguracionEmpresa,
     ]),
     SuscripcionesModule,
     CorreosModule,
     PagosModule,
   ],
   controllers: [ReservarController],
-  providers: [ReservarService],
+  providers: [ReservarService, CancelacionPublicaService],
 })
 export class ReservarModule {}

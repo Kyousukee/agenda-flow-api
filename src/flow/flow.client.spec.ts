@@ -1,6 +1,31 @@
 import { createHmac } from 'crypto';
 import { ConfigService } from '@nestjs/config';
-import { FlowClient, FlowError, cadenaAFirmar, firmar } from './flow.client';
+import {
+  FlowClient,
+  FlowError,
+  cadenaAFirmar,
+  firmar,
+  montoNetoDeFlow,
+} from './flow.client';
+
+describe('montoNetoDeFlow', () => {
+  it('lee paymentData.balance como número o texto', () => {
+    expect(montoNetoDeFlow({ balance: 4323 })).toBe(4323);
+    expect(montoNetoDeFlow({ balance: '4323' })).toBe(4323);
+  });
+
+  it('redondea hacia abajo a pesos enteros', () => {
+    expect(montoNetoDeFlow({ balance: '4323.80' })).toBe(4323);
+  });
+
+  it('sin balance o con un valor inválido devuelve null', () => {
+    expect(montoNetoDeFlow(null)).toBeNull();
+    expect(montoNetoDeFlow({ date: '2026-11-10' })).toBeNull();
+    expect(montoNetoDeFlow({ balance: '' })).toBeNull();
+    expect(montoNetoDeFlow({ balance: 'abc' })).toBeNull();
+    expect(montoNetoDeFlow({ balance: -10 })).toBeNull();
+  });
+});
 
 function configCon(valores: Record<string, string>): ConfigService {
   return {
@@ -126,6 +151,91 @@ describe('FlowClient', () => {
     expect(url.pathname).toBe('/api/payment/getStatus');
     expect(url.searchParams.get('s')).toBe(
       firmar({ apiKey: 'API-KEY', token: 'TOK' }, 'SECRET'),
+    );
+  });
+
+  it('crearReembolso envía el formulario firmado y normaliza la respuesta', async () => {
+    fetchMock.mockResolvedValue(
+      respuestaJson(200, {
+        token: 'RTOK',
+        flowRefundOrder: '987',
+        date: '2026-11-12 10:00:00',
+        status: 'created',
+        amount: '4800',
+        fee: '150',
+      }),
+    );
+
+    const reembolso = await cliente().crearReembolso(credenciales, {
+      refundCommerceOrder: 'RF-7',
+      receiverEmail: 'cliente@ejemplo.cl',
+      amount: 4800,
+      urlCallBack: 'https://api.ejemplo.cl/flow/reembolso/confirmacion',
+      commerceTrxId: 'R-1',
+    });
+
+    expect(reembolso).toEqual({
+      token: 'RTOK',
+      flowRefundOrder: 987,
+      status: 'created',
+      amount: 4800,
+      fee: 150,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://sandbox.flow.cl/api/refund/create');
+    expect(init.method).toBe('POST');
+    const cuerpo = new URLSearchParams(init.body as string);
+    expect(Object.fromEntries(cuerpo.entries())).toMatchObject({
+      apiKey: 'API-KEY',
+      refundCommerceOrder: 'RF-7',
+      receiverEmail: 'cliente@ejemplo.cl',
+      amount: '4800',
+      urlCallBack: 'https://api.ejemplo.cl/flow/reembolso/confirmacion',
+      commerceTrxId: 'R-1',
+    });
+    const sinFirma = Object.fromEntries(
+      [...cuerpo.entries()].filter(([k]) => k !== 's'),
+    );
+    expect(cuerpo.get('s')).toBe(firmar(sinFirma, 'SECRET'));
+  });
+
+  it('crearReembolso sin token en la respuesta lanza FlowError', async () => {
+    fetchMock.mockResolvedValue(respuestaJson(200, { status: 'created' }));
+    await expect(
+      cliente().crearReembolso(credenciales, {
+        refundCommerceOrder: 'RF-7',
+        receiverEmail: 'cliente@ejemplo.cl',
+        amount: 4800,
+        urlCallBack: 'https://api.ejemplo.cl/flow/reembolso/confirmacion',
+        commerceTrxId: 'R-1',
+      }),
+    ).rejects.toBeInstanceOf(FlowError);
+  });
+
+  it('estadoReembolso firma la query, normaliza el estado y tolera fee ausente', async () => {
+    fetchMock.mockResolvedValue(
+      respuestaJson(200, {
+        flowRefundOrder: 987,
+        status: 'REFUNDED',
+        amount: 4800,
+      }),
+    );
+
+    const estado = await cliente().estadoReembolso(credenciales, 'RTOK');
+
+    expect(estado).toEqual({
+      token: 'RTOK',
+      flowRefundOrder: 987,
+      status: 'refunded',
+      amount: 4800,
+      fee: null,
+    });
+    const [urlLlamada] = fetchMock.mock.calls[0] as [string];
+    const url = new URL(urlLlamada);
+    expect(url.pathname).toBe('/api/refund/getStatus');
+    expect(url.searchParams.get('s')).toBe(
+      firmar({ apiKey: 'API-KEY', token: 'RTOK' }, 'SECRET'),
     );
   });
 

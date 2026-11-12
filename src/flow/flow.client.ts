@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 
 /**
  * SPEC 06: cliente HTTP de Flow (payment/create y payment/getStatus).
+ * SPEC 07: refund/create y refund/getStatus.
  * Cada llamada se firma con las credenciales del comercio que recibe el dinero:
  * la cuenta de AgendaFlow (mensualidad) o la del local (abonos).
  */
@@ -50,7 +51,65 @@ export interface EstadoPagoFlow {
   amount: number;
   commerceOrder: string;
   flowOrder: number;
-  paymentData?: { date?: string | null } | null;
+  paymentData?: DatosDelPagoFlow | null;
+}
+
+/** `paymentData` de payment/getStatus. Flow puede enviar los montos como texto. */
+export interface DatosDelPagoFlow {
+  date?: string | null;
+  amount?: number | string | null;
+  fee?: number | string | null;
+  taxes?: number | string | null;
+  /** Lo que se transfiere al comercio: amount − fee − taxes. */
+  balance?: number | string | null;
+}
+
+/**
+ * SPEC 07: monto neto que recibe el comercio (`paymentData.balance`), en pesos enteros.
+ * Devuelve null si Flow no lo informa o no es un número válido.
+ */
+export function montoNetoDeFlow(
+  paymentData: DatosDelPagoFlow | null | undefined,
+): number | null {
+  const valor = paymentData?.balance;
+  if (valor === undefined || valor === null || valor === '') {
+    return null;
+  }
+  const neto = Number(valor);
+  return Number.isFinite(neto) && neto >= 0 ? Math.floor(neto) : null;
+}
+
+/**
+ * SPEC 07: valores de `status` en refund/create y refund/getStatus.
+ * Confirmar en el sandbox (paso 10 del plan).
+ */
+export const ESTADO_REEMBOLSO_FLOW = {
+  CREADO: 'created',
+  ACEPTADO: 'accepted',
+  RECHAZADO: 'rejected',
+  REEMBOLSADO: 'refunded',
+  CANCELADO: 'canceled',
+} as const;
+
+export interface DatosReembolsoFlow {
+  /** Orden propia del reembolso: `RF-{Reembolso.Id}`. */
+  refundCommerceOrder: string;
+  /** Email de quien recibe la devolución (el cliente que pagó). */
+  receiverEmail: string;
+  /** Pesos enteros (CLP). */
+  amount: number;
+  urlCallBack: string;
+  /** commerceOrder del cobro original: `R-{Pago.Id}`. */
+  commerceTrxId: string;
+}
+
+export interface ReembolsoFlow {
+  token: string;
+  flowRefundOrder: number;
+  status: string;
+  amount: number;
+  /** Comisión de Flow por el reembolso, si la informa. */
+  fee: number | null;
 }
 
 export class FlowError extends Error {
@@ -177,6 +236,68 @@ export class FlowClient {
       commerceOrder: String(respuesta.commerceOrder ?? ''),
       flowOrder: Number(respuesta.flowOrder),
       paymentData: respuesta.paymentData ?? null,
+    };
+  }
+
+  /** SPEC 07: pide a Flow devolver parte o todo un cobro. Es asíncrono: el resultado llega a urlCallBack. */
+  async crearReembolso(
+    credenciales: CredencialesFlow,
+    datos: DatosReembolsoFlow,
+  ): Promise<ReembolsoFlow> {
+    const cuerpo = this.conFirma(
+      {
+        apiKey: credenciales.apiKey,
+        refundCommerceOrder: datos.refundCommerceOrder,
+        receiverEmail: datos.receiverEmail,
+        amount: datos.amount,
+        urlCallBack: datos.urlCallBack,
+        commerceTrxId: datos.commerceTrxId,
+      },
+      credenciales.secretKey,
+    );
+
+    const respuesta = await this.llamar(`${this.apiUrl}/refund/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: cuerpo.toString(),
+    });
+    const reembolso = this.normalizarReembolso(respuesta);
+    if (!reembolso.token) {
+      throw new FlowError('Flow no devolvió el token del reembolso');
+    }
+    return reembolso;
+  }
+
+  async estadoReembolso(
+    credenciales: CredencialesFlow,
+    token: string,
+  ): Promise<ReembolsoFlow> {
+    const query = this.conFirma(
+      { apiKey: credenciales.apiKey, token },
+      credenciales.secretKey,
+    );
+    const respuesta = await this.llamar(
+      `${this.apiUrl}/refund/getStatus?${query.toString()}`,
+      { method: 'GET' },
+    );
+    const reembolso = this.normalizarReembolso(respuesta);
+    return { ...reembolso, token: reembolso.token || token };
+  }
+
+  private normalizarReembolso(respuesta: unknown): ReembolsoFlow {
+    const r = respuesta as Partial<
+      Record<keyof ReembolsoFlow, string | number | null>
+    >;
+    const fee =
+      r.fee === undefined || r.fee === null || r.fee === ''
+        ? null
+        : Number(r.fee);
+    return {
+      token: String(r.token ?? ''),
+      flowRefundOrder: Number(r.flowRefundOrder),
+      status: String(r.status ?? '').toLowerCase(),
+      amount: Number(r.amount),
+      fee: fee !== null && Number.isFinite(fee) ? fee : null,
     };
   }
 

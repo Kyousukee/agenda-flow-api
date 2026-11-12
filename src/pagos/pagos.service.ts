@@ -13,6 +13,18 @@ import { Estado } from '../reservas/entities/estado.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoEstadoDto } from './dto/update-pago-estado.dto';
+import { ReembolsarPagoDto } from './dto/reembolsar-pago.dto';
+import { ReembolsosService } from './reembolsos.service';
+import type { ReembolsoSolicitado } from './reembolsos.service';
+import { ReservaCorreosService } from '../correos/reserva-correos.service';
+
+/** SPEC 07: estados de reserva sobre los que `cancelarReserva` no hace nada. */
+const RESERVA_YA_TERMINADA = ['Cancelada', 'Anulado'];
+
+export interface ResultadoReembolsoPanel {
+  reembolso: ReembolsoSolicitado;
+  reserva: { estado: string | null };
+}
 
 @Injectable()
 export class PagosService {
@@ -25,6 +37,8 @@ export class PagosService {
     private readonly estadoRepo: Repository<Estado>,
     @InjectRepository(Sucursal)
     private readonly sucursalRepo: Repository<Sucursal>,
+    private readonly reembolsos: ReembolsosService,
+    private readonly correos: ReservaCorreosService,
   ) {}
 
   async obtenerEstados() {
@@ -95,6 +109,105 @@ export class PagosService {
     dto: UpdatePagoEstadoDto,
     empresaId: number,
   ) {
+    const pago = await this.pagoDeEmpresa(
+      id,
+      empresaId,
+      'No tienes permiso para modificar este pago',
+    );
+
+    const estado = await this.obtenerEstadoDePago(dto.estadoId);
+    // SPEC 07: en los pagos Flow, Reembolsado lo calcula el back a partir de los reembolsos.
+    if (estado.nombre === 'Reembolsado' && pago.cuentaFlowId) {
+      throw new BadRequestException(
+        'Los pagos con Flow se reembolsan con POST /pagos/:id/reembolso',
+      );
+    }
+    pago.estado = estado;
+    return this.pagoRepo.save(pago);
+  }
+
+  /**
+   * SPEC 07: reembolso total o parcial de un abono Flow desde el panel, sin plazo y sin
+   * depender del plan. Con `cancelarReserva`, la reserva pasa a Cancelada solo si Flow
+   * aceptó el reembolso (si Flow falla, `solicitar` lanza 502 antes de llegar aquí).
+   */
+  async reembolsar(
+    id: number,
+    dto: ReembolsarPagoDto,
+    empresaId: number,
+    usuarioId: number,
+  ): Promise<ResultadoReembolsoPanel> {
+    const pago = await this.pagoDeEmpresa(
+      id,
+      empresaId,
+      'No tienes permiso para reembolsar este pago',
+    );
+
+    const reembolso = await this.reembolsos.solicitar({
+      pagoId: pago.id,
+      monto: dto.monto,
+      origen: 'Panel',
+      usuarioId,
+    });
+
+    const reservaId = pago.reserva.id;
+    const cancelada = dto.cancelarReserva
+      ? await this.cancelarSiCorresponde(reservaId)
+      : false;
+    // En segundo plano: el cliente recibe el aviso del reembolso (y de la cancelación).
+    void this.correos.notificarReembolso(reservaId, reembolso.monto, cancelada);
+
+    const reserva = await this.reservaRepo.findOne({
+      where: { id: reservaId },
+      relations: { estado: true },
+    });
+    return { reembolso, reserva: { estado: reserva?.estado?.nombre ?? null } };
+  }
+
+  /** SPEC 07: historial de reembolsos del pago, refrescando antes los pendientes. */
+  async listarReembolsos(id: number, empresaId: number) {
+    const pago = await this.pagoDeEmpresa(
+      id,
+      empresaId,
+      'No tienes permiso para ver este pago',
+    );
+    await this.reembolsos.refrescarPendientes(pago.id);
+    return this.reembolsos.historial(pago.id);
+  }
+
+  /** Pasa la reserva a Cancelada salvo que ya esté Cancelada o Anulado (pago tardío de SPEC 06). */
+  /** Devuelve true si esta llamada la canceló. */
+  private async cancelarSiCorresponde(reservaId: number): Promise<boolean> {
+    const terminados = await this.estadoRepo.find({
+      where: RESERVA_YA_TERMINADA.map((nombre) => ({
+        tipo: 'Reserva',
+        nombre,
+      })),
+    });
+    const cancelada = terminados.find((e) => e.nombre === 'Cancelada');
+    if (!cancelada) {
+      throw new InternalServerErrorException(
+        "No existe el estado 'Cancelada' de tipo 'Reserva'",
+      );
+    }
+    // UPDATE condicional: si otra petición ya la canceló o anuló, no se toca.
+    const { affected } = await this.reservaRepo
+      .createQueryBuilder()
+      .update(Reserva)
+      .set({ estado: { id: cancelada.id } })
+      .where('Id = :reservaId', { reservaId })
+      .andWhere('(EstadoId IS NULL OR EstadoId NOT IN (:...terminados))', {
+        terminados: terminados.map((e) => e.id),
+      })
+      .execute();
+    return (affected ?? 0) > 0;
+  }
+
+  private async pagoDeEmpresa(
+    id: number,
+    empresaId: number,
+    mensajeAjeno: string,
+  ): Promise<Pago> {
     const pago = await this.pagoRepo.findOne({
       where: { id },
       relations: { reserva: { sucursal: { empresa: true } } },
@@ -103,13 +216,9 @@ export class PagosService {
       throw new NotFoundException('Pago no encontrado');
     }
     if (pago.reserva?.sucursal?.empresa?.id !== empresaId) {
-      throw new ForbiddenException(
-        'No tienes permiso para modificar este pago',
-      );
+      throw new ForbiddenException(mensajeAjeno);
     }
-
-    pago.estado = await this.obtenerEstadoDePago(dto.estadoId);
-    return this.pagoRepo.save(pago);
+    return pago;
   }
 
   async findAllBySucursal(sucursalId: number, empresaId: number) {
@@ -126,7 +235,7 @@ export class PagosService {
       );
     }
 
-    return this.pagoRepo
+    const pagos = await this.pagoRepo
       .createQueryBuilder('pago')
       .leftJoinAndSelect('pago.reserva', 'reserva')
       .leftJoinAndSelect('reserva.sucursal', 'sucursal')
@@ -137,5 +246,18 @@ export class PagosService {
       .where('sucursal.id = :sucursalId', { sucursalId })
       .orderBy('pago.fechaPago', 'DESC')
       .getMany();
+
+    // SPEC 07: montoNeto (columna) y montoReembolsado (suma de los Reembolsado).
+    const reembolsado = await this.reembolsos.reembolsadoPorPago(
+      pagos.map((p) => p.id),
+    );
+    return pagos.map((pago) => ({
+      ...pago,
+      montoNeto:
+        pago.montoNeto === null || pago.montoNeto === undefined
+          ? null
+          : Number(pago.montoNeto),
+      montoReembolsado: reembolsado.get(pago.id) ?? 0,
+    }));
   }
 }

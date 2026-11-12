@@ -289,6 +289,7 @@ CREATE TABLE dbo.Reserva (
     EmpleadoId      INT            NULL,
     ServicioId      INT            NULL,
     EstadoId        INT            NULL,
+    TokenCancelacionHash NVARCHAR(64) NULL,  -- SHA-256 del enlace público de cancelación (SPEC 07)
     CONSTRAINT FK_Reserva_Empresa  FOREIGN KEY (EmpresaId)  REFERENCES dbo.Empresa(Id),
     CONSTRAINT FK_Reserva_Sucursal FOREIGN KEY (SucursalId) REFERENCES dbo.Sucursal(id),
     CONSTRAINT FK_Reserva_Cliente  FOREIGN KEY (ClienteId)  REFERENCES dbo.Cliente(Id),
@@ -311,6 +312,7 @@ CREATE TABLE dbo.Pago (
     FlowToken           NVARCHAR(100)  NULL,
     FlowOrder           BIGINT         NULL,
     FechaExpiracion     DATETIME2      NULL,  -- fin de la retención de la hora
+    MontoNeto           DECIMAL(10,2)  NULL,  -- paymentData.balance de Flow: lo que recibe el local (SPEC 07)
     CONSTRAINT FK_Pago_Reserva FOREIGN KEY (ReservaId) REFERENCES dbo.Reserva(Id),
     CONSTRAINT FK_Pago_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
 );
@@ -406,6 +408,45 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_PagoSuscripcion_FlowToken')
 CREATE UNIQUE INDEX UX_PagoSuscripcion_FlowToken
     ON dbo.PagoSuscripcion(FlowToken) WHERE FlowToken IS NOT NULL;
+GO
+
+/* ---------------------------------------------------------------------
+   Reembolsos con Flow (SPEC 07 - ver migrations/006-reembolsos-flow.sql)
+   --------------------------------------------------------------------- */
+
+IF OBJECT_ID(N'dbo.Reembolso', N'U') IS NULL
+CREATE TABLE dbo.Reembolso (
+    Id               INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Reembolso PRIMARY KEY,
+    PagoId           INT            NOT NULL,
+    Monto            DECIMAL(10,2)  NOT NULL,
+    Origen           NVARCHAR(10)   NOT NULL,     -- 'Cliente' | 'Panel'
+    UsuarioId        INT            NULL,         -- quien lo pidió desde el panel; NULL si fue el cliente
+    EstadoId         INT            NOT NULL,     -- Estado tipo 'Pago': Pendiente | Reembolsado | Rechazado
+    FlowToken        NVARCHAR(100)  NULL,
+    FlowRefundOrder  BIGINT         NULL,
+    ComisionFlow     DECIMAL(10,2)  NULL,         -- fee que informa Flow por el reembolso
+    Error            NVARCHAR(500)  NULL,         -- mensaje de Flow si se rechazó
+    FechaCreacion    DATETIME2      NOT NULL CONSTRAINT DF_Reembolso_FechaCreacion DEFAULT GETDATE(),
+    FechaResolucion  DATETIME2      NULL,
+    CONSTRAINT FK_Reembolso_Pago    FOREIGN KEY (PagoId)    REFERENCES dbo.Pago(Id),
+    CONSTRAINT FK_Reembolso_Usuario FOREIGN KEY (UsuarioId) REFERENCES dbo.Usuario(id),
+    CONSTRAINT FK_Reembolso_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id),
+    CONSTRAINT CK_Reembolso_Origen  CHECK (Origen IN (N'Cliente', N'Panel'))
+);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Reembolso_FlowToken')
+CREATE UNIQUE INDEX UX_Reembolso_FlowToken
+    ON dbo.Reembolso(FlowToken) WHERE FlowToken IS NOT NULL;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Reembolso_PagoId')
+CREATE INDEX IX_Reembolso_PagoId ON dbo.Reembolso(PagoId);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Reserva_TokenCancelacionHash')
+CREATE UNIQUE INDEX UX_Reserva_TokenCancelacionHash
+    ON dbo.Reserva(TokenCancelacionHash) WHERE TokenCancelacionHash IS NOT NULL;
 GO
 
 /* ---------------------------------------------------------------------

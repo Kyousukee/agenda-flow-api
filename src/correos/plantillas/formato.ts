@@ -66,3 +66,26 @@ export function formatearHora(valor: string | Date): string {
 export function formatearPrecio(valor: number | string): string {
   return FORMATO_PRECIO.format(Number(valor));
 }
+
+/** SPEC 07: un instante real (no una fecha de reserva) se muestra en la hora del negocio. */
+const FORMATO_INSTANTE_CHILE = new Intl.DateTimeFormat('es-CL', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+  timeZone: 'America/Santiago',
+});
+
+/** "miércoles, 9 de diciembre de 2026 a las 15:00" (hora de Chile). */
+export function formatearInstante(instante: Date): string {
+  const partes = Object.fromEntries(
+    FORMATO_INSTANTE_CHILE.formatToParts(instante).map((p) => [
+      p.type,
+      p.value,
+    ]),
+  );
+  return `${partes.weekday}, ${partes.day} de ${partes.month} de ${partes.year} a las ${partes.hour}:${partes.minute}`;
+}

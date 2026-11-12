@@ -12,14 +12,19 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { ReservarService } from './reservar.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
+import { CancelacionPublicaService } from './cancelacion-publica.service';
 
 /**
  * API pública de la página de reservas: no exige sesión, así que no debe devolver
- * datos de clientes ni modificar nada que no sea crear una reserva nueva.
+ * datos de clientes ni modificar nada que no sea crear una reserva nueva o cancelarla
+ * con el token del correo (SPEC 07).
  */
 @Controller('reservar')
 export class ReservarController {
-  constructor(private readonly reservarService: ReservarService) {}
+  constructor(
+    private readonly reservarService: ReservarService,
+    private readonly cancelacion: CancelacionPublicaService,
+  ) {}
 
   @Get('empresa-slug/:slug')
   getEmpresaBySlug(@Param('slug') slug: string) {
@@ -72,5 +77,23 @@ export class ReservarController {
   @HttpCode(HttpStatus.CREATED)
   createReserva(@Body() dto: CreateReservaDto) {
     return this.reservarService.createReserva(dto);
+  }
+
+  /**
+   * SPEC 07: el token solo viaja en el correo de confirmación. Un token inválido o
+   * desconocido responde 404. No devuelve datos del cliente.
+   */
+  @Get('cancelacion/:token')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  getCancelacion(@Param('token') token: string) {
+    return this.cancelacion.consultar(token);
+  }
+
+  /** SPEC 07: cancela dentro del plazo y reembolsa el neto del abono Flow, si lo hay. */
+  @Post('cancelacion/:token')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  cancelar(@Param('token') token: string) {
+    return this.cancelacion.cancelar(token);
   }
 }

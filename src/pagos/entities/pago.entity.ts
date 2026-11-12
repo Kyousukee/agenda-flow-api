@@ -3,10 +3,12 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { Reserva } from '../../reservas/entities/reserva.entity';
 import { Estado } from '../../reservas/entities/estado.entity';
+import { Reembolso } from './reembolso.entity';
 
 @Entity('Pago')
 export class Pago {
@@ -46,6 +48,19 @@ export class Pago {
   /** Fin de la retención de la hora mientras el pago está Pendiente. */
   @Column({ type: 'datetime2', nullable: true, name: 'FechaExpiracion' })
   fechaExpiracion?: Date | null;
+
+  /** SPEC 07: paymentData.balance de Flow (monto − fee − taxes). Tope de los reembolsos. */
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    name: 'MontoNeto',
+  })
+  montoNeto?: number | null;
+
+  @OneToMany(() => Reembolso, (reembolso) => reembolso.pago)
+  reembolsos: Reembolso[];
 
   @ManyToOne(() => Reserva, (reserva) => reserva.pagos)
   @JoinColumn({ name: 'ReservaId' })

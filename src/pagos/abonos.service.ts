@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -16,7 +17,7 @@ import { PAGOS_ONLINE_POR_PLAN } from '../suscripciones/planes';
 import { CifradoCredenciales } from '../flow/cifrado';
 import { CuentasFlowService } from '../flow/cuentas-flow.service';
 import { CuentaFlow } from '../flow/entities/cuenta-flow.entity';
-import { ESTADO_FLOW, FlowClient } from '../flow/flow.client';
+import { ESTADO_FLOW, FlowClient, montoNetoDeFlow } from '../flow/flow.client';
 import { cambiarEstado, fechaDeFlow } from '../flow/cambiar-estado';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
 import { ESTADOS_QUE_LIBERAN, horaOcupada } from '../reservas/disponibilidad';
@@ -280,6 +281,7 @@ export class AbonosService {
       await this.confirmarPagado(
         pago,
         fechaDeFlow(estadoFlow.paymentData?.date),
+        montoNetoDeFlow(estadoFlow.paymentData),
       );
     } else if (
       estadoFlow.status === ESTADO_FLOW.RECHAZADA ||
@@ -295,8 +297,13 @@ export class AbonosService {
   /**
    * Pagado: Pago → Pagado y reserva Pendiente → Programada, con los correos de SPEC 02.
    * Pago tardío (reserva ya Anulado): se reactiva solo si la hora sigue libre.
+   * SPEC 07: guarda el neto que recibe el local (paymentData.balance), tope de los reembolsos.
    */
-  private async confirmarPagado(pago: Pago, fechaPago: Date): Promise<void> {
+  private async confirmarPagado(
+    pago: Pago,
+    fechaPago: Date,
+    montoNeto: number | null,
+  ): Promise<void> {
     const reserva = pago.reserva;
     const [pagado, pendiente, programada, anulado] = await Promise.all([
       this.estado('Pago', 'Pagado'),
@@ -309,7 +316,7 @@ export class AbonosService {
       // El dinero se recibió: el pago queda Pagado aunque la reserva ya se haya anulado.
       const pagoCambiado = await cambiarEstado(m, Pago, pago.id, pagado, {
         distintoDe: pagado.id,
-        extra: { fechaPago },
+        extra: montoNeto === null ? { fechaPago } : { fechaPago, montoNeto },
       });
       if (!pagoCambiado) {
         return false; // Otro proceso ya lo confirmó.
@@ -386,6 +393,57 @@ export class AbonosService {
         });
       }
     });
+  }
+
+  /**
+   * SPEC 07: neto que recibió el local por un abono Flow, en pesos enteros. Es el tope
+   * de los reembolsos. Si no se guardó al confirmar (pagos anteriores a la migración 006),
+   * se consulta payment/getStatus con la cuenta que firmó el cobro y se guarda.
+   * Lanza 502 si Flow no responde o no informa `balance`.
+   */
+  async asegurarMontoNeto(pago: Pago): Promise<number> {
+    if (pago.montoNeto !== null && pago.montoNeto !== undefined) {
+      return Number(pago.montoNeto);
+    }
+
+    const cuenta =
+      pago.cuentaFlowId && pago.flowToken
+        ? await this.cuentasFlow.buscarPorId(pago.cuentaFlowId)
+        : null;
+    if (!cuenta || !pago.flowToken) {
+      throw new BadGatewayException(
+        'No se pudo obtener de Flow el monto neto del pago',
+      );
+    }
+
+    let neto: number | null;
+    try {
+      const estadoFlow = await this.flow.obtenerEstado(
+        this.cuentasFlow.credenciales(cuenta),
+        pago.flowToken,
+      );
+      neto =
+        estadoFlow.commerceOrder === `R-${pago.id}`
+          ? montoNetoDeFlow(estadoFlow.paymentData)
+          : null;
+    } catch (error) {
+      // Flow caído, credenciales malas o FLOW_CREDENCIALES_KEY cambiada.
+      this.logger.error(
+        `No se pudo consultar el neto del pago ${pago.id} en Flow: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      neto = null;
+    }
+
+    if (neto === null) {
+      throw new BadGatewayException(
+        'No se pudo obtener de Flow el monto neto del pago',
+      );
+    }
+    await this.pagoRepo.update(pago.id, { montoNeto: neto });
+    pago.montoNeto = neto;
+    return neto;
   }
 
   /**
