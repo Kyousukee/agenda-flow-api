@@ -21,3 +21,14 @@ export const RECURSOS_LIMITADOS: RecursoLimitado[] = [
   'empleados',
   'servicios',
 ];
+
+// SPEC 06: mensualidad Pro cobrada con Flow.
+export const PRECIO_PRO_CLP = 19990;
+export const DIAS_POR_PAGO = 30;
+
+// SPEC 06: los abonos online con Flow son un beneficio de Prueba y Pro.
+export const PAGOS_ONLINE_POR_PLAN: Record<PlanSuscripcion, boolean> = {
+  Prueba: true,
+  Pro: true,
+  Gratis: false,
+};

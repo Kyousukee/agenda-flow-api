@@ -184,6 +184,54 @@ export class SuscripcionesService {
     return filas.map((f) => f.id);
   }
 
+  /**
+   * SPEC 06: un pago de la mensualidad extiende Pro con la regla de suscripcion-pro-extender.sql.
+   * Si la Prueba o el Pro siguen vigentes, los días se suman desde su FechaFin (pagar antes
+   * no hace perder días); si está en Gratis o ya venció, desde ahora. Un Pro sin vencimiento
+   * no se toca (finNuevo = null). Volver de Gratis reactiva el excedente en la próxima
+   * llamada a obtenerVigente (regla 5).
+   */
+  async extenderPro(
+    empresaId: number,
+    dias: number,
+    manager: EntityManager = this.dataSource.manager,
+  ): Promise<{ finAnterior: Date | null; finNuevo: Date | null }> {
+    const suscripcion = await manager.findOne(Suscripcion, {
+      where: { empresaId },
+    });
+    const finAnterior = suscripcion?.fechaFin ?? null;
+    if (suscripcion?.plan === 'Pro' && suscripcion.fechaFin === null) {
+      return { finAnterior, finNuevo: null };
+    }
+
+    const ahora = new Date();
+    const vigente =
+      (suscripcion?.plan === 'Prueba' || suscripcion?.plan === 'Pro') &&
+      finAnterior !== null &&
+      finAnterior.getTime() > ahora.getTime();
+    const base = vigente ? finAnterior : ahora;
+    const finNuevo = new Date(base.getTime() + dias * MS_POR_DIA);
+
+    if (suscripcion) {
+      await manager.update(
+        Suscripcion,
+        { empresaId },
+        { plan: 'Pro', fechaFin: finNuevo },
+      );
+    } else {
+      await manager.save(
+        manager.create(Suscripcion, {
+          empresaId,
+          plan: 'Pro',
+          fechaInicio: ahora,
+          fechaFin: finNuevo,
+          excedenteDesactivado: false,
+        }),
+      );
+    }
+    return { finAnterior, finNuevo };
+  }
+
   /** Cuenta los registros activos (Activo = 1) del recurso para la empresa. */
   async contarActivos(empresaId: number, recurso: RecursoLimitado): Promise<number> {
     return this.dataSource

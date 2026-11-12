@@ -5,6 +5,7 @@ import { ReservarService } from './reservar.service';
 import { CreateReservaDto } from './dto/create-reserva.dto';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
+import { AbonosService } from '../pagos/abonos.service';
 
 const EMPRESA = 1;
 const SUCURSAL = 10;
@@ -36,6 +37,8 @@ function montar(
     ofrece?: unknown;
     solapes?: number;
     horarios?: unknown[];
+    cobro?: unknown;
+    pagoIniciado?: unknown;
   } = {},
 ) {
   const repo = (valor: unknown) => ({
@@ -61,6 +64,13 @@ function montar(
     ),
   };
   const correos = { notificarNuevaReserva: jest.fn() };
+  // SPEC 06: por defecto la empresa no cobra al reservar.
+  const abonos = {
+    anularVencidos: jest.fn().mockResolvedValue(0),
+    evaluarCobro: jest.fn().mockResolvedValue(opciones.cobro ?? null),
+    registrarPendiente: jest.fn().mockResolvedValue({ id: 77 }),
+    iniciar: jest.fn().mockResolvedValue(opciones.pagoIniciado ?? null),
+  };
   const horarioRepo = {
     find: jest
       .fn()
@@ -69,9 +79,9 @@ function montar(
       ),
   };
 
-  const service = new (ReservarService as unknown as new (
-    ...args: unknown[]
-  ) => ReservarService)(
+  const service = new (
+    ReservarService as unknown as new (...args: unknown[]) => ReservarService
+  )(
     {}, // reserva
     repo(
       'sucursal' in opciones
@@ -102,8 +112,9 @@ function montar(
     dataSource,
     {}, // suscripciones
     correos,
+    abonos,
   );
-  return { service, manager, correos, dataSource, horarioRepo };
+  return { service, manager, correos, dataSource, horarioRepo, abonos };
 }
 
 describe('ReservarService.createReserva', () => {
@@ -150,11 +161,23 @@ describe('ReservarService.createReserva', () => {
   });
 
   it.each([
-    ['sucursal de otra empresa', { sucursal: { activo: true, empresa: { id: 2 } } }],
-    ['sucursal inactiva', { sucursal: { activo: false, empresa: { id: EMPRESA } } }],
-    ['servicio de otra empresa', { servicio: { activo: true, empresa: { id: 2 } } }],
+    [
+      'sucursal de otra empresa',
+      { sucursal: { activo: true, empresa: { id: 2 } } },
+    ],
+    [
+      'sucursal inactiva',
+      { sucursal: { activo: false, empresa: { id: EMPRESA } } },
+    ],
+    [
+      'servicio de otra empresa',
+      { servicio: { activo: true, empresa: { id: 2 } } },
+    ],
     ['servicio inexistente', { servicio: null }],
-    ['empleado de otra sucursal', { empleado: { activo: true, sucursal: { id: 99 } } }],
+    [
+      'empleado de otra sucursal',
+      { empleado: { activo: true, sucursal: { id: 99 } } },
+    ],
     ['empleado que no ofrece el servicio', { ofrece: null }],
   ])('rechaza %s', async (_caso, opciones) => {
     const { service, dataSource } = montar(opciones);
@@ -243,5 +266,216 @@ describe('ReservarService.createReserva', () => {
     );
     expect(manager.save).not.toHaveBeenCalled();
     expect(correos.notificarNuevaReserva).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReservarService.createReserva con abono (SPEC 06)', () => {
+  const cobro = { monto: 4500, cuenta: { id: 3 } };
+  const pagoIniciado = {
+    monto: 4500,
+    urlPago: 'https://sandbox.flow.cl/app/web/pay.php?token=TOK',
+    expiraEn: new Date('2026-11-10T15:15:00Z'),
+  };
+
+  it('sin cobro, la reserva queda Programada, pago null y los correos salen de inmediato', async () => {
+    const { service, manager, correos, abonos } = montar();
+
+    const res = await service.createReserva(dto());
+
+    expect(res).toMatchObject({ estado: 'Programada', pago: null });
+    expect(manager.findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        where: { tipo: 'Reserva', nombre: 'Programada' },
+      }),
+    );
+    expect(abonos.registrarPendiente).not.toHaveBeenCalled();
+    expect(correos.notificarNuevaReserva).toHaveBeenCalledWith(5);
+  });
+
+  it('pasa pagarAhora y el precio del servicio al decidir el cobro', async () => {
+    const { service, abonos } = montar();
+    await service.createReserva(dto({ pagarAhora: true }));
+    expect(abonos.evaluarCobro).toHaveBeenCalledWith({
+      empresaId: EMPRESA,
+      sucursalId: SUCURSAL,
+      precio: 15000,
+      pagarAhora: true,
+    });
+  });
+
+  it('con cobro, la reserva nace Pendiente, se registra el pago y no se envían correos', async () => {
+    const { service, manager, correos, abonos } = montar({
+      cobro,
+      pagoIniciado,
+    });
+
+    const res = await service.createReserva(dto());
+
+    expect(manager.findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        where: { tipo: 'Reserva', nombre: 'Pendiente' },
+      }),
+    );
+    expect(abonos.registrarPendiente).toHaveBeenCalledWith(manager, 5, cobro);
+    expect(abonos.iniciar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pago: { id: 77 },
+        reservaId: 5,
+        cobro,
+        email: 'cliente@example.com',
+      }),
+    );
+    expect(res).toMatchObject({ estado: 'Pendiente', pago: pagoIniciado });
+    expect(correos.notificarNuevaReserva).not.toHaveBeenCalled();
+  });
+
+  it('con cobro y sin clienteEmail responde 400 sin crear la reserva', async () => {
+    const { service, manager } = montar({ cobro });
+
+    await expect(
+      service.createReserva(dto({ clienteEmail: undefined })),
+    ).rejects.toThrow('El email es obligatorio para pagar online');
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('si Flow falla, la respuesta trae pago null, estado Programada y los correos se envían', async () => {
+    const { service, correos } = montar({ cobro, pagoIniciado: null });
+
+    const res = await service.createReserva(dto());
+
+    expect(res).toMatchObject({ estado: 'Programada', pago: null });
+    expect(correos.notificarNuevaReserva).toHaveBeenCalledWith(5);
+  });
+});
+
+describe('ReservarService: pago online público (SPEC 06)', () => {
+  function montarPublico(
+    opciones: {
+      config?: unknown;
+      plan?: string;
+      cifradoDisponible?: boolean;
+    } = {},
+  ) {
+    const config =
+      'config' in opciones
+        ? opciones.config
+        : {
+            permitePagoAnticipado: true,
+            pagoObligatorio: true,
+            tipoAnticipo: 'Porcentaje',
+            montoAnticipo: 30,
+          };
+    const suscripciones = {
+      obtenerVigente: jest
+        .fn()
+        .mockResolvedValue({ plan: opciones.plan ?? 'Pro' }),
+    };
+    const servicioRepo = {
+      find: jest.fn().mockResolvedValue([
+        { id: 1, nombre: 'Corte', precio: 9990, duracionMinutos: 30 },
+        { id: 2, nombre: 'Gratis', precio: 0, duracionMinutos: 15 },
+      ]),
+    };
+    const empresaRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: EMPRESA,
+        nombre: 'Peluquería',
+        slug: 'peluqueria',
+      }),
+    };
+    const abonos = new AbonosService(
+      { findOne: jest.fn().mockResolvedValue(config) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      suscripciones as never,
+      { disponible: opciones.cifradoDisponible ?? true } as never,
+      {} as never,
+      {} as never,
+      {} as never, // correos
+    );
+
+    const service = new (
+      ReservarService as unknown as new (...args: unknown[]) => ReservarService
+    )(
+      {}, // reserva
+      {}, // sucursal
+      servicioRepo,
+      {}, // empleado
+      {}, // horario
+      {}, // bloqueo
+      {}, // servicioEmpleado
+      {}, // empresaSlug
+      empresaRepo,
+      {}, // dataSource
+      suscripciones,
+      {}, // correos
+      abonos,
+    );
+    return { service, suscripciones };
+  }
+
+  it('la empresa publica la configuración de anticipo activa', async () => {
+    const { service } = montarPublico();
+    const empresa = await service.getEmpresaBySlug('peluqueria');
+    expect(empresa.pagoOnline).toEqual({
+      activo: true,
+      obligatorio: true,
+      tipo: 'Porcentaje',
+      monto: 30,
+    });
+  });
+
+  it('en Completo el monto es null', async () => {
+    const { service } = montarPublico({
+      config: {
+        permitePagoAnticipado: true,
+        pagoObligatorio: false,
+        tipoAnticipo: 'Completo',
+        montoAnticipo: 0,
+      },
+    });
+    const empresa = await service.getEmpresaBySlug('peluqueria');
+    expect(empresa.pagoOnline).toEqual({
+      activo: true,
+      obligatorio: false,
+      tipo: 'Completo',
+      monto: null,
+    });
+  });
+
+  it.each([
+    ['plan Gratis', { plan: 'Gratis' }],
+    ['sin FLOW_CREDENCIALES_KEY', { cifradoDisponible: false }],
+    ['anticipo desactivado', { config: { permitePagoAnticipado: false } }],
+    ['sin configuración', { config: null }],
+  ])('%s → pagoOnline inactivo y abono null', async (_caso, opciones) => {
+    const { service } = montarPublico(opciones);
+    const empresa = await service.getEmpresaBySlug('peluqueria');
+    expect(empresa.pagoOnline).toEqual({
+      activo: false,
+      obligatorio: false,
+      tipo: null,
+      monto: null,
+    });
+    const servicios = await service.getServiciosByEmpresa(EMPRESA);
+    expect(servicios.map((s) => s.abono)).toEqual([null, null]);
+  });
+
+  it('cada servicio trae su abono calculado', async () => {
+    const { service } = montarPublico();
+    const servicios = await service.getServiciosByEmpresa(EMPRESA);
+    expect(servicios.map((s) => [s.nombre, s.abono])).toEqual([
+      ['Corte', 2997],
+      ['Gratis', null],
+    ]);
+  });
+
+  it('getEmpresaBySlug resuelve el plan una sola vez', async () => {
+    const { service, suscripciones } = montarPublico();
+    await service.getEmpresaBySlug('peluqueria');
+    expect(suscripciones.obtenerVigente).toHaveBeenCalledTimes(1);
   });
 });

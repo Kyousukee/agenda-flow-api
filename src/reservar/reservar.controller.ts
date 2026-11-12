@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   ParseIntPipe,
+  ParseUUIDPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -58,6 +59,12 @@ export class ReservarController {
   @Get('servicios-empleados/:sucursalId')
   getServiciosEmpleados(@Param('sucursalId', ParseIntPipe) sucursalId: number) {
     return this.reservarService.getServiciosEmpleadosBySucursal(sucursalId);
+  }
+
+  /** SPEC 06: el código es el UUID de la reserva; sin él no se puede adivinar el estado de otra. */
+  @Get('reservas/:codigo/pago')
+  getEstadoPago(@Param('codigo', ParseUUIDPipe) codigo: string) {
+    return this.reservarService.getEstadoPago(codigo);
   }
 
   @Post()

@@ -50,6 +50,10 @@ export class ConfiguracionEmpresa {
   @Column({ type: 'bit', default: false, name: 'EnviarWhatsapp' })
   enviarWhatsapp: boolean;
 
+  /** SPEC 06: si es false, el cliente elige pagar el anticipo ahora o en el local. */
+  @Column({ type: 'bit', default: true, name: 'PagoObligatorio' })
+  pagoObligatorio: boolean;
+
   @OneToOne(() => Empresa, (empresa) => empresa.configuracion)
   @JoinColumn({ name: 'EmpresaId' })
   empresa: Empresa;
