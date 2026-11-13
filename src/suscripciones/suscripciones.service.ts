@@ -11,6 +11,8 @@ import { Suscripcion } from './entities/suscripcion.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
 import { Servicio } from '../servicios/entities/servicio.entity';
+import { Usuario } from '../usuarios/entities/usuario.entity';
+import { ROL_RECEPCIONISTA } from '../auth/roles';
 import {
   DIAS_AVISO,
   LIMITES_PLAN,
@@ -33,13 +35,24 @@ export interface ResumenSuscripcion {
   uso: Record<RecursoLimitado, number>;
 }
 
-type EntidadLimitada = typeof Sucursal | typeof Empleado | typeof Servicio;
+type EntidadLimitada =
+  typeof Sucursal | typeof Empleado | typeof Servicio | typeof Usuario;
 type FiltroRecurso = { activo?: boolean; desactivadoPorSuscripcion?: boolean };
 
 const ENTIDAD_POR_RECURSO: Record<RecursoLimitado, EntidadLimitada> = {
   sucursales: Sucursal,
   empleados: Empleado,
   servicios: Servicio,
+  // SPEC 08: usuarios con rol recepcionista de la empresa (incluye invitaciones pendientes).
+  recepcionistas: Usuario,
+};
+
+/**
+ * SPEC 08: desactivar un recepcionista también sube su TokenVersion, así el JwtAuthGuard
+ * corta su sesión en la siguiente petición. Reactivarlo no la toca: vuelve a iniciar sesión.
+ */
+const CIERRA_SESION: Partial<Record<RecursoLimitado, true>> = {
+  recepcionistas: true,
 };
 
 @Injectable()
@@ -115,7 +128,13 @@ export class SuscripcionesService {
         if (excedente.length > 0) {
           await manager.getRepository(ENTIDAD_POR_RECURSO[recurso]).update(
             { id: In(excedente) },
-            { activo: false, desactivadoPorSuscripcion: true },
+            {
+              activo: false,
+              desactivadoPorSuscripcion: true,
+              ...(CIERRA_SESION[recurso] && {
+                tokenVersion: () => 'TokenVersion + 1',
+              }),
+            },
           );
         }
       }
@@ -313,7 +332,13 @@ export class SuscripcionesService {
     const where =
       recurso === 'empleados'
         ? { ...filtro, sucursal: { empresa: { id: empresaId } } }
-        : { ...filtro, empresa: { id: empresaId } };
+        : recurso === 'recepcionistas'
+          ? {
+              ...filtro,
+              empresa: { id: empresaId },
+              rol: { id: ROL_RECEPCIONISTA },
+            }
+          : { ...filtro, empresa: { id: empresaId } };
     return where as FindOptionsWhere<{ id: number }>;
   }
 }

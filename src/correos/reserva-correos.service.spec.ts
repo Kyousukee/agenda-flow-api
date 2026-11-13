@@ -177,6 +177,30 @@ describe('ReservaCorreosService.notificarNuevaReserva: enlace de cancelación', 
   });
 });
 
+/** SPEC 08: la reserva creada desde el panel no avisa al local. */
+describe('ReservaCorreosService.notificarNuevaReserva: aviso interno', () => {
+  const empleado = { nombre: 'Ana', email: 'ana@barberia.cl' };
+
+  it('por defecto avisa al local y al empleado', async () => {
+    const { service, enviados } = montar({ empleado });
+    await service.notificarNuevaReserva(5);
+    expect(enviados().map((c) => c.to)).toEqual(
+      expect.arrayContaining([
+        'carlos@email.com',
+        'local@barberia.cl',
+        'ana@barberia.cl',
+      ]),
+    );
+  });
+
+  it('con avisoInterno: false solo envía la confirmación al cliente, con el enlace de cancelación', async () => {
+    const { service, enviados, correoAlCliente } = montar({ empleado });
+    await service.notificarNuevaReserva(5, { avisoInterno: false });
+    expect(enviados().map((c) => c.to)).toEqual(['carlos@email.com']);
+    expect(correoAlCliente()!.html).toContain('Cancelar mi reserva');
+  });
+});
+
 describe('ReservaCorreosService: correos de cancelación y reembolso (SPEC 07)', () => {
   it('cancelación del cliente con reembolso: al cliente y aviso al local', async () => {
     const { service, enviados } = montar({ estado: 'Cancelada' });

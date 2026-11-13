@@ -6,6 +6,8 @@ const HORA_MS = 60 * MINUTO_MS;
 /** Vigencia de los enlaces que se envían por correo. */
 export const VIGENCIA_VERIFICACION_MS = 24 * HORA_MS;
 export const VIGENCIA_RESET_MS = HORA_MS;
+/** SPEC 08: la invitación de un recepcionista usa las columnas de reset, con más plazo. */
+export const VIGENCIA_INVITACION_MS = 7 * 24 * HORA_MS;
 
 /** Límite de correos por usuario y tipo. */
 export const ESPERA_ENTRE_ENVIOS_MS = MINUTO_MS;

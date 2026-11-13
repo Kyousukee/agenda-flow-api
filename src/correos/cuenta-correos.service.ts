@@ -4,6 +4,7 @@ import { CorreosService } from './correos.service';
 import { PlantillaCorreo } from './plantillas/layout';
 import { restablecerContrasena } from './plantillas/restablecer-contrasena';
 import { verificarEmail } from './plantillas/verificar-email';
+import { invitacionEquipo } from './plantillas/invitacion-equipo';
 
 export interface DestinatarioCuenta {
   nombre: string;
@@ -55,6 +56,21 @@ export class CuentaCorreosService {
       restablecerContrasena({
         nombre: destinatario.nombre,
         enlace: this.enlace('restablecer-contrasena', token),
+      }),
+    );
+  }
+
+  /** SPEC 08: invitación a un recepcionista. Nunca lanza. */
+  enviarInvitacion(
+    destinatario: DestinatarioCuenta,
+    token: string,
+    datos: { empresa: string; sucursal: string; invitadoPor: string },
+  ): Promise<boolean> {
+    return this.enviar(destinatario, () =>
+      invitacionEquipo({
+        nombre: destinatario.nombre,
+        enlace: this.enlace('invitacion', token),
+        ...datos,
       }),
     );
   }

@@ -386,4 +386,107 @@ describe('CuentaService', () => {
       );
     });
   });
+
+  /** SPEC 08: invitación de un recepcionista (columnas de reset, vigencia de 7 días). */
+  describe('invitación', () => {
+    const invitado = (extra: Partial<Usuario> = {}) =>
+      ({
+        id: 20,
+        nombre: 'Rocío',
+        email: 'rocio@example.com',
+        resetExpira: new Date(Date.now() + 60_000),
+        empresa: { nombre: 'Barbería SpA', nombreComercial: 'Barbería' },
+        sucursal: { nombre: 'Centro' },
+        ...extra,
+      }) as unknown as Usuario;
+
+    it('consultar busca por el hash, solo recepcionistas activos, y devuelve lo mínimo', async () => {
+      const { servicio, findOne } = preparar({ usuario: invitado() });
+
+      await expect(servicio.consultarInvitacion('tok123')).resolves.toEqual({
+        nombre: 'Rocío',
+        email: 'rocio@example.com',
+        empresa: 'Barbería',
+        sucursal: 'Centro',
+      });
+      expect(findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            resetTokenHash: hashToken('tok123'),
+            rol: { id: 2 },
+            activo: true,
+          },
+        }),
+      );
+    });
+
+    it.each([
+      ['no existe', null],
+      ['venció', { resetExpira: new Date(Date.now() - 1000) }],
+      ['no tiene vencimiento', { resetExpira: null }],
+    ])('consultar responde 400 si el token %s', async (_caso, extra) => {
+      const { servicio } = preparar({
+        usuario: extra === null ? null : invitado(extra),
+      });
+      const error = await servicio
+        .consultarInvitacion('tok123')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).message).toBe(
+        'El enlace no es válido o expiró',
+      );
+    });
+
+    it('aceptar hace el UPDATE del reset acotado al recepcionista y devuelve su id', async () => {
+      const { servicio, consultas } = preparar({ usuario: invitado() });
+
+      await expect(
+        servicio.aceptarInvitacion('tok123', 'clave-nueva'),
+      ).resolves.toBe(20);
+
+      expect(consultas).toHaveLength(1);
+      const [consulta] = consultas;
+      expect(consulta.where).toEqual([
+        'ResetTokenHash = :hash',
+        'ResetExpira > :ahora',
+        'Activo = 1',
+        'id = :id',
+        'RolId = :rol',
+      ]);
+      expect(consulta.parametros).toMatchObject({
+        hash: hashToken('tok123'),
+        id: 20,
+        rol: 2,
+      });
+      expect(consulta.set).toMatchObject({
+        emailVerificado: true,
+        resetTokenHash: null,
+        resetExpira: null,
+      });
+      expect((consulta.set.tokenVersion as () => string)()).toBe(
+        'TokenVersion + 1',
+      );
+      await expect(
+        bcrypt.compare('clave-nueva', consulta.set.passwordHash as string),
+      ).resolves.toBe(true);
+    });
+
+    it('aceptar con un token que otra petición ya usó responde 400', async () => {
+      const { servicio, afectadas } = preparar({ usuario: invitado() });
+      afectadas.valor = 0;
+      await expect(
+        servicio.aceptarInvitacion('tok123', 'clave-nueva'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('aceptar con un token vencido no llega a escribir', async () => {
+      const { servicio, consultas } = preparar({
+        usuario: invitado({ resetExpira: new Date(Date.now() - 1000) }),
+      });
+      await expect(
+        servicio.aceptarInvitacion('tok123', 'clave-nueva'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(consultas).toHaveLength(0);
+    });
+  });
 });

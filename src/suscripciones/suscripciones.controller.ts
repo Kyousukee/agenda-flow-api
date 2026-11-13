@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import { ROL_ADMIN } from '../auth/roles';
 
 @Controller('suscripcion')
 @UseGuards(JwtAuthGuard)
@@ -14,7 +15,10 @@ export class SuscripcionesController {
     private readonly pagosSuscripcion: PagosSuscripcionService,
   ) {}
 
+  /** SPEC 08: solo el rol 1; el recepcionista no ve la suscripción. */
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles(ROL_ADMIN)
   obtener(@Req() req: { user?: JwtPayload }) {
     return this.suscripcionesService.obtenerResumen(req.user!.empresaId);
   }

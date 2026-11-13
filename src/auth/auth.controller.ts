@@ -1,5 +1,7 @@
 import {
   Controller,
+  Get,
+  Param,
   Post,
   Body,
   HttpCode,
@@ -15,6 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { VerificarEmailDto } from './dto/verificar-email.dto';
 import { OlvideContrasenaDto } from './dto/olvide-contrasena.dto';
 import { RestablecerContrasenaDto } from './dto/restablecer-contrasena.dto';
+import { AceptarInvitacionDto } from './dto/aceptar-invitacion.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { GoogleRegistroDto } from './dto/google-registro.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -89,5 +92,24 @@ export class AuthController {
   async restablecerContrasena(@Body() dto: RestablecerContrasenaDto) {
     await this.cuentaService.restablecerContrasena(dto.token, dto.password);
     return { message: 'Tu contraseña fue restablecida. Inicia sesión.' };
+  }
+
+  /** SPEC 08: datos de la invitación para la página pública. No expone nada más. */
+  @Get('invitacion/:token')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  consultarInvitacion(@Param('token') token: string) {
+    return this.cuentaService.consultarInvitacion(token);
+  }
+
+  /** SPEC 08: el recepcionista crea su contraseña y entra directo (misma respuesta que login). */
+  @Post('aceptar-invitacion')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async aceptarInvitacion(@Body() dto: AceptarInvitacionDto) {
+    const usuarioId = await this.cuentaService.aceptarInvitacion(
+      dto.token,
+      dto.password,
+    );
+    return this.authService.sesionDe(usuarioId);
   }
 }

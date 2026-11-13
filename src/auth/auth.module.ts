@@ -42,6 +42,7 @@ import { CorreosModule } from '../correos/correos.module';
   providers: [AuthService, CuentaService, GoogleAuthService],
   // TypeOrmModule: JwtAuthGuard se resuelve en cada módulo que importa AuthModule
   // y necesita el repositorio de Usuario.
-  exports: [AuthService, JwtModule, TypeOrmModule],
+  // SPEC 08: CuentaService lo usa la gestión del equipo para las invitaciones.
+  exports: [AuthService, CuentaService, JwtModule, TypeOrmModule],
 })
 export class AuthModule {}

@@ -21,6 +21,7 @@ import { AuthModule } from './auth/auth.module';
 import { SuscripcionesModule } from './suscripciones/suscripciones.module';
 import { CorreosModule } from './correos/correos.module';
 import { FlowModule } from './flow/flow.module';
+import { UsuariosModule } from './usuarios/usuarios.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { FlowModule } from './flow/flow.module';
     SuscripcionesModule,
     CorreosModule,
     FlowModule,
+    UsuariosModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

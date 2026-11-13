@@ -6,6 +6,7 @@ import { CreateReservaDto } from './dto/create-reserva.dto';
 import { Reserva } from '../reservas/entities/reserva.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { AbonosService } from '../pagos/abonos.service';
+import { CreacionReservaService } from '../reservas/creacion-reserva.service';
 
 const EMPRESA = 1;
 const SUCURSAL = 10;
@@ -79,37 +80,52 @@ function montar(
       ),
   };
 
+  const sucursalRepo = repo(
+    'sucursal' in opciones
+      ? opciones.sucursal
+      : { id: SUCURSAL, activo: true, empresa: { id: EMPRESA } },
+  );
+  const servicioRepo = repo(
+    'servicio' in opciones
+      ? opciones.servicio
+      : {
+          id: SERVICIO,
+          activo: true,
+          precio: 15000,
+          duracionMinutos: 45,
+          empresa: { id: EMPRESA },
+        },
+  );
+  const empleadoRepo = repo(
+    'empleado' in opciones
+      ? opciones.empleado
+      : { id: EMPLEADO, activo: true, sucursal: { id: SUCURSAL } },
+  );
+  const ofreceRepo = repo('ofrece' in opciones ? opciones.ofrece : { id: 1 });
+
+  // SPEC 08: la validación y la transacción viven en CreacionReservaService.
+  const creacion = new CreacionReservaService(
+    sucursalRepo as never,
+    servicioRepo as never,
+    empleadoRepo as never,
+    horarioRepo as never,
+    ofreceRepo as never,
+    dataSource as never,
+  );
+
   const service = new (
     ReservarService as unknown as new (...args: unknown[]) => ReservarService
   )(
     {}, // reserva
-    repo(
-      'sucursal' in opciones
-        ? opciones.sucursal
-        : { id: SUCURSAL, activo: true, empresa: { id: EMPRESA } },
-    ),
-    repo(
-      'servicio' in opciones
-        ? opciones.servicio
-        : {
-            id: SERVICIO,
-            activo: true,
-            precio: 15000,
-            duracionMinutos: 45,
-            empresa: { id: EMPRESA },
-          },
-    ),
-    repo(
-      'empleado' in opciones
-        ? opciones.empleado
-        : { id: EMPLEADO, activo: true, sucursal: { id: SUCURSAL } },
-    ),
+    sucursalRepo,
+    servicioRepo,
+    empleadoRepo,
     horarioRepo,
     {}, // bloqueo
-    repo('ofrece' in opciones ? opciones.ofrece : { id: 1 }),
+    ofreceRepo,
     {}, // empresaSlug
     {}, // empresa
-    dataSource,
+    creacion,
     {}, // suscripciones
     correos,
     abonos,
@@ -409,7 +425,7 @@ describe('ReservarService: pago online público (SPEC 06)', () => {
       {}, // servicioEmpleado
       {}, // empresaSlug
       empresaRepo,
-      {}, // dataSource
+      {}, // creacion
       suscripciones,
       {}, // correos
       abonos,

@@ -14,6 +14,9 @@ import { Servicio } from '../../servicios/entities/servicio.entity';
 import { Cliente } from '../../clientes/entities/cliente.entity';
 import { Estado } from './estado.entity';
 import { Pago } from '../../pagos/entities/pago.entity';
+import { Usuario } from '../../usuarios/entities/usuario.entity';
+
+export type OrigenReserva = 'Online' | 'Panel';
 
 @Entity('Reserva')
 export class Reserva {
@@ -47,6 +50,15 @@ export class Reserva {
     name: 'TokenCancelacionHash',
   })
   tokenCancelacionHash?: string | null;
+
+  /** SPEC 08: 'Online' (página pública) o 'Panel' (dueño o recepcionista). */
+  @Column({ type: 'nvarchar', length: 10, default: 'Online', name: 'Origen' })
+  origen: OrigenReserva;
+
+  /** SPEC 08: quién la agendó desde el panel. NULL en las reservas online. */
+  @ManyToOne(() => Usuario, { nullable: true })
+  @JoinColumn({ name: 'UsuarioCreadorId' })
+  usuarioCreador?: Usuario | null;
 
   @CreateDateColumn({ type: 'datetime2', name: 'FechaCreacion' })
   fechaCreacion: Date;

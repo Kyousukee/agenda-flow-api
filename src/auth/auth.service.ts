@@ -23,6 +23,7 @@ import { DatosNegocioDto, RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { GoogleRegistroDto } from './dto/google-registro.dto';
 import { GoogleAuthService } from './google-auth.service';
+import { ROL_RECEPCIONISTA } from './roles';
 import {
   TokenCuenta,
   VIGENCIA_VERIFICACION_MS,
@@ -43,6 +44,17 @@ type CredencialCuenta =
   | { tipo: 'google'; googleId: string };
 
 const MENSAJE_EMAIL_REGISTRADO = 'El email ya está registrado';
+
+/** SPEC 08: login con Google de un recepcionista que no aceptó su invitación. */
+export const MENSAJE_INVITACION_PENDIENTE =
+  'Acepta la invitación que llegó a tu correo antes de entrar con Google';
+
+/** Relaciones que necesita construirRespuesta. SPEC 08: la sucursal del recepcionista. */
+const RELACIONES_SESION = {
+  rol: true,
+  empresa: true,
+  sucursal: true,
+} as const;
 
 @Injectable()
 export class AuthService {
@@ -87,7 +99,7 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.usuarioRepo.findOne({
       where: { email: dto.email.toLowerCase() },
-      relations: { rol: true, empresa: true },
+      relations: RELACIONES_SESION,
     });
     if (!user) {
       throw new UnauthorizedException('Credenciales inválidas');
@@ -118,7 +130,7 @@ export class AuthService {
    */
   async loginGoogle(credential: string) {
     const perfil = await this.googleAuth.verificar(credential);
-    const relations = { rol: true, empresa: true } as const;
+    const relations = RELACIONES_SESION;
 
     let user = await this.usuarioRepo.findOne({
       where: { googleId: perfil.sub },
@@ -143,6 +155,11 @@ export class AuthService {
       if (!porEmail.activo) {
         throw new UnauthorizedException('Cuenta desactivada');
       }
+      // SPEC 08: Google no acepta la invitación; el enlace del correo sí. Sin esto,
+      // vincular dejaría el email verificado y activaría la cuenta sin pasar por él.
+      if (porEmail.rol?.id === ROL_RECEPCIONISTA && !porEmail.emailVerificado) {
+        throw new UnauthorizedException(MENSAJE_INVITACION_PENDIENTE);
+      }
       user = await this.vincularGoogle(porEmail, perfil.sub);
     }
 
@@ -150,6 +167,18 @@ export class AuthService {
       throw new UnauthorizedException('Cuenta desactivada');
     }
 
+    return this.construirRespuesta(user);
+  }
+
+  /** SPEC 08: sesión del recepcionista que acaba de aceptar su invitación. */
+  async sesionDe(usuarioId: number) {
+    const user = await this.usuarioRepo.findOne({
+      where: { id: usuarioId },
+      relations: RELACIONES_SESION,
+    });
+    if (!user?.activo) {
+      throw new UnauthorizedException('Cuenta desactivada');
+    }
     return this.construirRespuesta(user);
   }
 
@@ -358,12 +387,23 @@ export class AuthService {
       relations: { sucursal: { empresa: true } },
     });
 
+    // SPEC 08: la sucursal del recepcionista es la asignada en Usuario.SucursalId, nunca
+    // la de un empleado con su email: es la que fija su alcance en todos los endpoints.
+    const esRecepcionista = user.rol?.id === ROL_RECEPCIONISTA;
+    const sucursalRecepcionista = esRecepcionista
+      ? user.sucursal
+        ? { id: user.sucursal.id, nombre: user.sucursal.nombre ?? null }
+        : null
+      : undefined;
+
     const payload = {
       sub: user.id,
       email: user.email,
       rolId: user.rol?.id,
       empresaId: user.empresa?.id,
-      sucursalId: empleado?.sucursal?.id ?? sucursalId,
+      sucursalId: esRecepcionista
+        ? sucursalRecepcionista?.id
+        : (empleado?.sucursal?.id ?? sucursalId),
       tokenVersion: user.tokenVersion,
     };
 
@@ -376,6 +416,7 @@ export class AuthService {
         email: user.email,
         rolId: user.rol?.id,
         emailVerificado: user.emailVerificado,
+        ...(esRecepcionista && { sucursal: sucursalRecepcionista }),
         empleado: empleado
           ? {
               id: empleado.id,
@@ -446,7 +487,7 @@ export class AuthService {
 }
 
 /** SQL Server: 2627 = restricción UNIQUE, 2601 = índice único. */
-function esViolacionUnica(error: unknown): boolean {
+export function esViolacionUnica(error: unknown): boolean {
   const driver = (error as { driverError?: { number?: number } })?.driverError;
   const numero =
     driver?.number ?? (error as { number?: number } | null)?.number;
