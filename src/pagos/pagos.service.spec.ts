@@ -11,9 +11,15 @@ import { Estado } from '../reservas/entities/estado.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { ReembolsosService } from './reembolsos.service';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
+import { PagosController } from './pagos.controller';
+import { ROLES_KEY } from '../auth/decorators/roles.decorator';
+import { ROL_ADMIN, ROL_RECEPCIONISTA } from '../auth/roles';
+import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 const EMPRESA = 1;
 const OTRA = 2;
+// SPEC 08: los servicios reciben el JWT completo, no solo la empresa.
+const DUENO = { sub: 9, email: 'd@example.com', rolId: 1, empresaId: EMPRESA };
 
 function montar(
   duena = OTRA,
@@ -99,7 +105,7 @@ describe('PagosService: aislamiento entre empresas', () => {
     await expect(
       service.create(
         { reservaId: 7, monto: 1, fechaPago: '2030-01-01' },
-        EMPRESA,
+        DUENO,
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(pagoRepo.save).not.toHaveBeenCalled();
@@ -108,14 +114,14 @@ describe('PagosService: aislamiento entre empresas', () => {
   it('no cambia el estado de pagos de otra empresa', async () => {
     const { service, pagoRepo } = montar();
     await expect(
-      service.actualizarEstado(3, { estadoId: 2 }, EMPRESA),
+      service.actualizarEstado(3, { estadoId: 2 }, DUENO),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(pagoRepo.save).not.toHaveBeenCalled();
   });
 
   it('no lista pagos de otra empresa', async () => {
     const { service, pagoRepo } = montar();
-    await expect(service.findAllBySucursal(10, EMPRESA)).rejects.toBeInstanceOf(
+    await expect(service.findAllBySucursal(10, DUENO)).rejects.toBeInstanceOf(
       ForbiddenException,
     );
     expect(pagoRepo.createQueryBuilder).not.toHaveBeenCalled();
@@ -123,7 +129,7 @@ describe('PagosService: aislamiento entre empresas', () => {
 
   it('permite operar sobre pagos propios', async () => {
     const { service, pagoRepo } = montar(EMPRESA);
-    await service.actualizarEstado(3, { estadoId: 2 }, EMPRESA);
+    await service.actualizarEstado(3, { estadoId: 2 }, DUENO);
     expect(pagoRepo.save).toHaveBeenCalled();
   });
 });
@@ -134,7 +140,7 @@ describe('PagosService: estados', () => {
   it('registra el pago como Pagado si no se indica estado', async () => {
     const { service, pagoRepo, estadoRepo } = montar(EMPRESA);
 
-    await service.create(pagoNuevo, EMPRESA);
+    await service.create(pagoNuevo, DUENO);
 
     expect(estadoRepo.findOne).toHaveBeenCalledWith({
       where: { tipo: 'Pago', nombre: 'Pagado' },
@@ -152,7 +158,7 @@ describe('PagosService: estados', () => {
       const { service, pagoRepo } = montar(EMPRESA, { id: 1, tipo });
 
       await expect(
-        service.create({ ...pagoNuevo, estadoId: 1 }, EMPRESA),
+        service.create({ ...pagoNuevo, estadoId: 1 }, DUENO),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(pagoRepo.save).not.toHaveBeenCalled();
     },
@@ -162,7 +168,7 @@ describe('PagosService: estados', () => {
     const { service, pagoRepo } = montar(EMPRESA, { id: 8, tipo: 'Usuario' });
 
     await expect(
-      service.actualizarEstado(3, { estadoId: 8 }, EMPRESA),
+      service.actualizarEstado(3, { estadoId: 8 }, DUENO),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(pagoRepo.save).not.toHaveBeenCalled();
   });
@@ -195,7 +201,7 @@ describe('PagosService: reembolsos (SPEC 07)', () => {
     });
 
     await expect(
-      service.actualizarEstado(3, { estadoId: 17 }, EMPRESA),
+      service.actualizarEstado(3, { estadoId: 17 }, DUENO),
     ).rejects.toThrow(
       'Los pagos con Flow se reembolsan con POST /pagos/:id/reembolso',
     );
@@ -205,7 +211,7 @@ describe('PagosService: reembolsos (SPEC 07)', () => {
   it('un pago manual se sigue marcando Reembolsado a mano', async () => {
     const { service, pagoRepo } = montar(EMPRESA, REEMBOLSADO);
 
-    await service.actualizarEstado(3, { estadoId: 17 }, EMPRESA);
+    await service.actualizarEstado(3, { estadoId: 17 }, DUENO);
 
     expect(pagoRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ estado: REEMBOLSADO }),
@@ -218,7 +224,7 @@ describe('PagosService: reembolsos (SPEC 07)', () => {
       { id: 16, tipo: 'Pago', nombre: 'Rechazado' },
       { cuentaFlowId: 3 },
     );
-    await service.actualizarEstado(3, { estadoId: 16 }, EMPRESA);
+    await service.actualizarEstado(3, { estadoId: 16 }, DUENO);
     expect(pagoRepo.save).toHaveBeenCalled();
   });
 
@@ -321,7 +327,7 @@ describe('PagosService: reembolsos (SPEC 07)', () => {
     pagoRepo.createQueryBuilder.mockReturnValue(consulta);
     reembolsos.reembolsadoPorPago.mockResolvedValue(new Map([[3, 1000]]));
 
-    const pagos = await service.findAllBySucursal(10, EMPRESA);
+    const pagos = await service.findAllBySucursal(10, DUENO);
 
     expect(reembolsos.reembolsadoPorPago).toHaveBeenCalledWith([3, 4]);
     expect(pagos).toEqual([
@@ -370,5 +376,91 @@ describe('PagosService: correo al cliente al reembolsar (SPEC 07)', () => {
       BadGatewayException,
     );
     expect(correos.notificarReembolso).not.toHaveBeenCalled();
+  });
+});
+
+describe('PagosService: recepcionista (SPEC 08)', () => {
+  const recepcionista = (sucursalId: number): JwtPayload => ({
+    sub: 20,
+    email: 'r@example.com',
+    rolId: ROL_RECEPCIONISTA,
+    empresaId: EMPRESA,
+    sucursalId,
+  });
+  const pagoNuevo = { reservaId: 7, monto: 5000, fechaPago: '2030-01-01' };
+
+  it('registra un pago manual en una reserva de su sucursal', async () => {
+    const { service, pagoRepo } = montar(EMPRESA);
+    await service.create(pagoNuevo, recepcionista(10));
+    expect(pagoRepo.save).toHaveBeenCalled();
+  });
+
+  it('cambia el estado de un pago manual de su sucursal', async () => {
+    const { service, pagoRepo } = montar(EMPRESA);
+    await service.actualizarEstado(3, { estadoId: 15 }, recepcionista(10));
+    expect(pagoRepo.save).toHaveBeenCalled();
+  });
+
+  it('lista los pagos de su sucursal', async () => {
+    const { service, pagoRepo } = montar(EMPRESA);
+    pagoRepo.createQueryBuilder.mockReturnValue({
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    });
+    await expect(
+      service.findAllBySucursal(10, recepcionista(10)),
+    ).resolves.toEqual([]);
+  });
+
+  it('en otra sucursal de su empresa recibe 403 al crear, cambiar y listar', async () => {
+    const { service, pagoRepo } = montar(EMPRESA);
+    const ajeno = recepcionista(11);
+    await expect(service.create(pagoNuevo, ajeno)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(
+      service.actualizarEstado(3, { estadoId: 15 }, ajeno),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.findAllBySucursal(10, ajeno)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(pagoRepo.save).not.toHaveBeenCalled();
+    expect(pagoRepo.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('no puede cambiar el estado de un pago Flow (403); el dueño sí', async () => {
+    const flow = montar(EMPRESA, undefined, { cuentaFlowId: 3 });
+    await expect(
+      flow.service.actualizarEstado(3, { estadoId: 15 }, recepcionista(10)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(flow.pagoRepo.save).not.toHaveBeenCalled();
+
+    await flow.service.actualizarEstado(3, { estadoId: 15 }, DUENO);
+    expect(flow.pagoRepo.save).toHaveBeenCalled();
+  });
+
+  it('el controlador abre ver, estados, registrar y cambiar estado al rol 2, pero no los reembolsos', () => {
+    const roles = (metodo: string) =>
+      Reflect.getMetadata(
+        ROLES_KEY,
+        Object.getOwnPropertyDescriptor(PagosController.prototype, metodo)!
+          .value as object,
+      ) as number[] | undefined;
+    for (const metodo of [
+      'findAll',
+      'obtenerEstados',
+      'create',
+      'actualizarEstado',
+    ]) {
+      expect(roles(metodo)).toEqual([ROL_ADMIN, ROL_RECEPCIONISTA]);
+    }
+    for (const metodo of ['reembolsar', 'listarReembolsos']) {
+      expect(roles(metodo)).toBeUndefined();
+    }
+    expect(Reflect.getMetadata(ROLES_KEY, PagosController)).toEqual([
+      ROL_ADMIN,
+    ]);
   });
 });

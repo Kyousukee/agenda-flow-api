@@ -91,8 +91,14 @@ export class ReservaCorreosService {
   /**
    * Reserva nueva: confirmación al cliente (si la empresa lo habilitó y hay email),
    * aviso a la empresa y aviso al empleado asignado. Nunca lanza.
+   * SPEC 08: con `avisoInterno: false` (reserva creada desde el panel) solo se envía
+   * la confirmación al cliente: quien la agendó ya está en el local.
    */
-  async notificarNuevaReserva(reservaId: number): Promise<void> {
+  async notificarNuevaReserva(
+    reservaId: number,
+    opciones: { avisoInterno?: boolean } = {},
+  ): Promise<void> {
+    const avisoInterno = opciones.avisoInterno ?? true;
     try {
       const ctx = await this.cargarContexto(reservaId);
       if (!ctx) return;
@@ -111,7 +117,7 @@ export class ReservaCorreosService {
         );
       }
 
-      if (ctx.emailEmpresa) {
+      if (avisoInterno && ctx.emailEmpresa) {
         envios.push(
           this.enviar(
             ctx,
@@ -123,6 +129,7 @@ export class ReservaCorreosService {
 
       // Si el empleado comparte email con la empresa, basta con un aviso interno.
       if (
+        avisoInterno &&
         ctx.emailEmpleado &&
         !mismoEmail(ctx.emailEmpleado, ctx.emailEmpresa)
       ) {

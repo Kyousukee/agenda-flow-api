@@ -17,6 +17,7 @@ import { Empresa } from '../empresas/entities/empresa.entity';
 import { SuscripcionesModule } from '../suscripciones/suscripciones.module';
 import { CorreosModule } from '../correos/correos.module';
 import { PagosModule } from '../pagos/pagos.module';
+import { ReservasModule } from '../reservas/reservas.module';
 import { Pago } from '../pagos/entities/pago.entity';
 import { ConfiguracionEmpresa } from '../configuracion-empresa/entities/configuracion-empresa.entity';
 
@@ -40,6 +41,7 @@ import { ConfiguracionEmpresa } from '../configuracion-empresa/entities/configur
     SuscripcionesModule,
     CorreosModule,
     PagosModule,
+    ReservasModule,
   ],
   controllers: [ReservarController],
   providers: [ReservarService, CancelacionPublicaService],

@@ -6,7 +6,7 @@
 |---------------|------------------------------|
 | **Base URL**  | `http://localhost:3000/api`  |
 | **Auth**      | JWT (Bearer Token)           |
-| **Roles**     | `admin`, `empleado`          |
+| **Roles**     | `1` administrador (dueño), `2` recepcionista (SPEC 08) |
 | **Formato**   | JSON                         |
 | **Soft Delete** | `activo = false`           |
 
@@ -334,6 +334,46 @@ Request: `credential` más los datos del negocio y la sucursal de `POST /auth/re
 Response `201`: el mismo cuerpo que `POST /auth/register`, con `user.emailVerificado = true`. No envía correo de verificación.
 
 Errores: `401` como en `/auth/google`; `409` si ya existe una cuenta con ese email o esa cuenta de Google.
+
+**Invitación de recepcionistas** (ver `specs/08-reservas-presenciales-y-recepcionistas.md`)
+
+| Método | Endpoint | Auth | Rol | Descripción |
+|--------|----------|------|-----|-------------|
+| GET | `/auth/invitacion/:token` | No | - | Datos de la invitación para la página pública |
+| POST | `/auth/aceptar-invitacion` | No | - | El recepcionista crea su contraseña y entra |
+
+Ambas rutas tienen un límite de 10 peticiones por minuto por IP (`429`). El token llega en el correo de invitación (`{FRONT_URL}/invitacion?token=...`), vence en 7 días y solo se guarda su hash. Reenviar la invitación invalida el enlace anterior.
+
+**GET `/auth/invitacion/:token`**
+
+Response `200`:
+```json
+{
+  "nombre": "Rocío",
+  "email": "rocio@correo.cl",
+  "empresa": "Barbería Central",
+  "sucursal": "Casa Matriz"
+}
+```
+
+Response `400` si el token no existe, venció, ya se usó o el recepcionista está desactivado: `El enlace no es válido o expiró`.
+
+**POST `/auth/aceptar-invitacion`**
+
+Request (`password` de 8 a 72 caracteres):
+```json
+{ "token": "...", "password": "secret123" }
+```
+
+Response `200`: el mismo cuerpo que `POST /auth/login`. El recepcionista queda con sesión iniciada y el email verificado. Response `400` con el mismo mensaje si el token no sirve.
+
+**Sesión del recepcionista (rol 2)**
+
+- El JWT lleva `rolId: 2` y el `sucursalId` asignado por el dueño (`Usuario.SucursalId`). Ese `sucursalId` fija su alcance en todos los endpoints.
+- `user` agrega `sucursal: { id, nombre }`. El rol 1 no recibe ese campo.
+- Antes de aceptar la invitación, `POST /auth/login` responde `401 Credenciales inválidas`.
+- `POST /auth/google` con el email de una invitación pendiente responde `401 Acepta la invitación que llegó a tu correo antes de entrar con Google` y no vincula la cuenta. Después de aceptarla, entra con Google como cualquier cuenta.
+- Desactivar al recepcionista o cambiarlo de sucursal cierra su sesión: la siguiente petición responde `401` y debe volver a iniciar sesión.
 
 ---
 
@@ -812,6 +852,158 @@ Response `200`:
   }
 }
 ```
+
+---
+
+### Reservas presenciales y recepcionistas (SPEC 08)
+
+Ver `specs/08-reservas-presenciales-y-recepcionistas.md`. Todas las rutas requieren JWT. "Rol 2" significa que el recepcionista puede usarla **solo sobre su sucursal**: otra sucursal, aunque sea de su empresa, responde `403 No tienes permiso para acceder a esta sucursal`.
+
+| Método | Endpoint | Roles | Descripción |
+|--------|----------|-------|-------------|
+| GET | `/reservas/proxima-hora?sucursalId=&servicioId=&fecha=` | 1, 2 | Primer hueco de cada barbero y su cola |
+| POST | `/reservas` | 1, 2 | Reserva presencial o telefónica |
+| GET | `/reservas?sucursalId=` | 1, 2 | Reservas de la sucursal |
+| PATCH | `/reservas/:id/estado` | 1, 2 | Cambiar el estado de una reserva |
+| GET | `/pagos?sucursalId=` | 1, 2 | Pagos de la sucursal (lista que se exporta a Excel) |
+| GET | `/pagos/estados` | 1, 2 | Estados de pago |
+| POST | `/pagos` | 1, 2 | Registrar un pago manual |
+| PATCH | `/pagos/:id/estado` | 1, 2 | Rol 2: solo pagos manuales. Un pago Flow → `403` |
+| POST | `/pagos/:id/reembolso`, GET `/pagos/:id/reembolsos` | 1 | Reembolsos Flow (SPEC 07) |
+| GET | `/equipo` | 1 | Recepcionistas de la empresa |
+| POST | `/equipo` | 1 | Invitar a un recepcionista |
+| PATCH | `/equipo/:id` | 1 | Editar, cambiar de sucursal, activar o desactivar |
+| POST | `/equipo/:id/reenviar-invitacion` | 1 | Reenviar el correo de invitación |
+| GET | `/suscripcion` | 1 | Plan y límites. Antes estaba abierto a cualquier JWT |
+
+Empleados, servicios, horarios, bloqueos, sucursales, configuración, cuentas Flow y suscripción siguen solo para el rol 1. Para armar el formulario de reserva, el rol 2 usa los endpoints públicos de `/reservar/*` con su `sucursalId`.
+
+"Hoy" y "ahora" son la fecha y la hora de `America/Santiago`, no las del servidor.
+
+**GET `/reservas/proxima-hora`**
+
+Query: `sucursalId`, `servicioId` y `fecha` opcional (`AAAA-MM-DD`, por defecto hoy, no puede ser anterior a hoy).
+
+Response `200`:
+```json
+{
+  "fecha": "2026-11-13",
+  "ahora": "10:02",
+  "servicio": { "id": 97, "nombre": "Corte + Barba", "duracionMinutos": 45 },
+  "empleados": [
+    {
+      "empleadoId": 76,
+      "nombre": "Diego",
+      "apellido": "Fuentes",
+      "foto": null,
+      "horaInicio": "10:45",
+      "horaFin": "11:30",
+      "reservasAntes": 0,
+      "esperaMinutos": 43
+    },
+    {
+      "empleadoId": 75,
+      "nombre": "Matías",
+      "apellido": "Rojas",
+      "foto": null,
+      "horaInicio": null,
+      "horaFin": null,
+      "reservasAntes": 4,
+      "esperaMinutos": null
+    }
+  ]
+}
+```
+
+- Incluye cada empleado activo de la sucursal que ofrece el servicio, ordenados por `horaInicio`. Los que no tienen cupo ese día van al final, con `horaInicio`, `horaFin` y `esperaMinutos` en `null`.
+- El hueco es el primer tramo libre donde cabe el servicio completo, dentro del horario de atención y sin cruzarse con reservas activas ni bloqueos. Para hoy se busca desde ahora redondeado hacia arriba a 5 minutos; para otra fecha, desde la apertura.
+- `reservasAntes`: reservas del barbero ese día que no están canceladas, rechazadas, anuladas ni completadas, que terminan después de ahora y empiezan antes del hueco. Incluye la que está en curso. Sin hueco, cuenta las que quedan en el día.
+- `esperaMinutos`: minutos desde ahora hasta el hueco. `null` para otra fecha.
+- Errores: `400` si el servicio no es de la empresa o está inactivo, o si la fecha ya pasó; `403` fuera de alcance; `404` si la sucursal no existe.
+
+**POST `/reservas`**
+
+Request (`empleadoId` obligatorio; `clienteEmail`, `clienteTelefono` y `observacion` opcionales):
+```json
+{
+  "sucursalId": 1,
+  "servicioId": 97,
+  "empleadoId": 76,
+  "fecha": "2026-11-13",
+  "horaInicio": "10:45",
+  "clienteNombre": "Pedro",
+  "clienteTelefono": "+56912345678"
+}
+```
+
+Response `201`:
+```json
+{
+  "id": 187,
+  "codigo": "ec88b752-3608-44af-9f38-aad6ac1e79be",
+  "fecha": "2026-11-13",
+  "horaInicio": "10:45",
+  "horaFin": "11:30",
+  "precio": 12000,
+  "estado": "Programada",
+  "origen": "Panel",
+  "empleado": { "id": 76, "nombre": "Diego", "apellido": "Fuentes" },
+  "cliente": { "nombre": "Pedro" },
+  "reservasAntes": 0
+}
+```
+
+- La hora no se recalcula: se guarda la `horaInicio` enviada (la que mostró `proxima-hora`) o falla.
+- Nace `Programada`, con `origen: "Panel"` y el usuario que la creó. Nunca cobra abono Flow: el cliente paga en el local con `POST /pagos`.
+- Con `clienteEmail` se reusa el cliente de la empresa con ese email y se le envía la confirmación con el enlace de cancelación (SPEC 07). No se envía aviso interno al local.
+- No acepta `empresaId` (sale del JWT) ni `pagarAhora`: un campo extra responde `400`.
+- Errores: `400` si los datos no se corresponden, la hora está fuera del horario de atención o ya pasó; `403` fuera de alcance; `404` si la sucursal no existe; `409 La hora seleccionada ya no está disponible` si se cruza con otra reserva o un bloqueo. Ante un `409`, volver a consultar `proxima-hora`.
+
+**GET `/reservas?sucursalId=`**
+
+Cada reserva agrega `origen` (`"Online"` o `"Panel"`) y `usuarioCreador: { id, nombre } | null` (`null` en las reservas online).
+
+**POST `/equipo`**
+
+Request:
+```json
+{ "nombre": "Rocío", "apellido": "Soto", "email": "rocio@correo.cl", "sucursalId": 1 }
+```
+
+Response `201` (mismo formato que cada elemento de `GET /equipo`):
+```json
+{
+  "id": 31,
+  "nombre": "Rocío",
+  "apellido": "Soto",
+  "email": "rocio@correo.cl",
+  "sucursal": { "id": 1, "nombre": "Casa Matriz" },
+  "activo": true,
+  "invitacionPendiente": true,
+  "desactivadoPorSuscripcion": false
+}
+```
+
+- Envía el correo de invitación. El recepcionista no tiene contraseña hasta aceptarla.
+- `invitacionPendiente` deja de ser `true` cuando acepta la invitación.
+- Errores: `400 La sucursal no es válida` (de otra empresa o inactiva); `403` con `code: "SUSCRIPCION_LIMITE"` y `recurso: "recepcionistas"` en el plan Gratis; `409 Ese email ya tiene una cuenta`.
+
+**PATCH `/equipo/:id`**
+
+Request (todos opcionales): `{ "nombre", "apellido", "sucursalId", "activo" }`. Responde `200` con el recepcionista actualizado.
+
+- Cambiar `sucursalId` o pasar `activo` a `false` cierra su sesión.
+- Pasar `activo` a `true` valida el límite del plan.
+- Un `apellido` vacío lo borra.
+- `404` si no existe o no es un recepcionista de la empresa.
+
+**POST `/equipo/:id/reenviar-invitacion`**
+
+Response `204`. Genera un enlace nuevo y el anterior deja de servir. Errores: `409` si la invitación ya fue aceptada o el recepcionista está desactivado; `429` si se reenvió hace menos de 1 minuto o más de 5 veces en una hora.
+
+**Límite por plan**
+
+`GET /suscripcion` incluye `limites.recepcionistas` y `uso.recepcionistas`. Gratis: `0`; Prueba y Pro: `null` (ilimitado). Las invitaciones pendientes cuentan. Al bajar a Gratis, los recepcionistas quedan desactivados con `desactivadoPorSuscripcion: true` y se cierra su sesión; al volver a Pro se reactivan. Un recepcionista desactivado a mano no se reactiva solo.
 
 ---
 

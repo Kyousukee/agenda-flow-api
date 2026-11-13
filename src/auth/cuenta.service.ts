@@ -5,7 +5,9 @@ import { MssqlParameter, Repository } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { CuentaCorreosService } from '../correos/cuenta-correos.service';
 import { Usuario } from '../usuarios/entities/usuario.entity';
+import { ROL_RECEPCIONISTA } from './roles';
 import {
+  VIGENCIA_INVITACION_MS,
   VIGENCIA_RESET_MS,
   VIGENCIA_VERIFICACION_MS,
   evaluarLimiteEnvio,
@@ -14,6 +16,16 @@ import {
 } from './token-cuenta';
 
 const MENSAJE_TOKEN_INVALIDO = 'El enlace no es válido o venció';
+/** SPEC 08: GET /auth/invitacion/:token y POST /auth/aceptar-invitacion. */
+export const MENSAJE_INVITACION_INVALIDA = 'El enlace no es válido o expiró';
+
+/** SPEC 08: lo que la página pública de la invitación puede mostrar. */
+export interface InvitacionVigente {
+  nombre: string;
+  email: string;
+  empresa: string | null;
+  sucursal: string | null;
+}
 
 /** Campos del límite de envíos y del token vigente, por tipo de correo. */
 const CAMPOS = {
@@ -112,11 +124,69 @@ export class CuentaService {
   }
 
   async restablecerContrasena(token: string, password: string): Promise<void> {
+    const afectadas = await this.fijarContrasena(token, password);
+    if (afectadas !== 1) {
+      throw new BadRequestException(MENSAJE_TOKEN_INVALIDO);
+    }
+  }
+
+  /**
+   * SPEC 08: datos que muestra la página de la invitación. Solo sirve para un
+   * recepcionista activo con el token vigente; no devuelve nada más del usuario.
+   */
+  async consultarInvitacion(token: string): Promise<InvitacionVigente> {
+    const usuario = await this.invitacionVigente(token);
+    return {
+      nombre: usuario.nombre,
+      email: usuario.email,
+      empresa:
+        usuario.empresa?.nombreComercial || usuario.empresa?.nombre || null,
+      sucursal: usuario.sucursal?.nombre ?? null,
+    };
+  }
+
+  /**
+   * SPEC 08: define la contraseña con el token de la invitación. Es el mismo UPDATE
+   * condicional de restablecerContrasena (email verificado, TokenVersion + 1, tokens
+   * limpios), acotado además al recepcionista. Devuelve su id para iniciar sesión.
+   */
+  async aceptarInvitacion(token: string, password: string): Promise<number> {
+    const usuario = await this.invitacionVigente(token);
+    const afectadas = await this.fijarContrasena(token, password, usuario.id);
+    if (afectadas !== 1) {
+      throw new BadRequestException(MENSAJE_INVITACION_INVALIDA);
+    }
+    return usuario.id;
+  }
+
+  private async invitacionVigente(token: string): Promise<Usuario> {
+    const usuario = await this.usuarioRepo.findOne({
+      where: {
+        resetTokenHash: hashToken(token),
+        rol: { id: ROL_RECEPCIONISTA },
+        activo: true,
+      },
+      relations: { empresa: true, sucursal: true },
+    });
+    if (!usuario?.resetExpira || usuario.resetExpira.getTime() <= Date.now()) {
+      throw new BadRequestException(MENSAJE_INVITACION_INVALIDA);
+    }
+    return usuario;
+  }
+
+  /**
+   * Un solo UPDATE condicional: subir TokenVersion cierra todas las sesiones, y
+   * usar el enlace demuestra que controla el buzón, así que el email queda verificado.
+   * Con `soloRecepcionista`, además exige ese id y el rol 2 (invitación).
+   */
+  private async fijarContrasena(
+    token: string,
+    password: string,
+    soloRecepcionista?: number,
+  ): Promise<number> {
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Un solo UPDATE condicional: subir TokenVersion cierra todas las sesiones, y
-    // usar el enlace demuestra que controla el buzón, así que el email queda verificado.
-    const resultado = await this.usuarioRepo
+    const consulta = this.usuarioRepo
       .createQueryBuilder()
       .update(Usuario)
       .set({
@@ -130,12 +200,15 @@ export class CuentaService {
       })
       .where('ResetTokenHash = :hash', { hash: hashToken(token) })
       .andWhere('ResetExpira > :ahora', { ahora: datetime2(new Date()) })
-      .andWhere('Activo = 1')
-      .execute();
-
-    if (resultado.affected !== 1) {
-      throw new BadRequestException(MENSAJE_TOKEN_INVALIDO);
+      .andWhere('Activo = 1');
+    if (soloRecepcionista !== undefined) {
+      consulta
+        .andWhere('id = :id', { id: soloRecepcionista })
+        .andWhere('RolId = :rol', { rol: ROL_RECEPCIONISTA });
     }
+
+    const resultado = await consulta.execute();
+    return resultado.affected ?? 0;
   }
 
   private async procesarOlvido(email: string): Promise<void> {
@@ -161,6 +234,15 @@ export class CuentaService {
         `No se pudo procesar el restablecimiento: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * SPEC 08: token de invitación de un recepcionista. Usa las columnas de reset
+   * (ResetTokenHash / ResetExpira) con vigencia de 7 días y el mismo límite de envíos.
+   * Devuelve el token en claro, o null si el límite no permite enviar otro.
+   */
+  prepararInvitacion(usuario: Usuario): Promise<string | null> {
+    return this.reservarEnvio(usuario, 'reset', VIGENCIA_INVITACION_MS);
   }
 
   /**

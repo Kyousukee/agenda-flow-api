@@ -1,22 +1,12 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  EntityManager,
-  In,
-  MoreThanOrEqual,
-  Not,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { In, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { Reserva } from '../reservas/entities/reserva.entity';
-import { Cliente } from '../clientes/entities/cliente.entity';
 import { Sucursal } from '../sucursales/entities/sucursal.entity';
 import { Servicio } from '../servicios/entities/servicio.entity';
 import { Empleado } from '../empleados/entities/empleado.entity';
@@ -33,26 +23,8 @@ import { AbonosService } from '../pagos/abonos.service';
 import type { CobroAbono, PagoIniciado } from '../pagos/abonos.service';
 import { calcularAbono } from '../pagos/abonos';
 import { Pago } from '../pagos/entities/pago.entity';
-import { ESTADOS_QUE_LIBERAN, horaOcupada } from '../reservas/disponibilidad';
-
-/** Error de SQL Server cuando la transacción pierde un interbloqueo. */
-const MSSQL_DEADLOCK = 1205;
-
-function aMinutos(hora: string): number {
-  const [h, m] = hora.split(':').map(Number);
-  return h * 60 + m;
-}
-
-function aHora(minutos: number): string {
-  const h = Math.floor(minutos / 60);
-  const m = minutos % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-/** Día de la semana de una fecha AAAA-MM-DD: 1 = lunes … 7 = domingo. */
-function diaDeLaSemana(fecha: string): number {
-  return new Date(`${fecha}T12:00:00Z`).getUTCDay() || 7;
-}
+import { ESTADOS_QUE_LIBERAN } from '../reservas/disponibilidad';
+import { CreacionReservaService } from '../reservas/creacion-reserva.service';
 
 /** Margen de un día: el servidor y el cliente pueden estar en husos horarios distintos. */
 function fechaMinima(): string {
@@ -80,7 +52,7 @@ export class ReservarService {
     private readonly empresaSlugRepo: Repository<EmpresaSlug>,
     @InjectRepository(Empresa)
     private readonly empresaRepo: Repository<Empresa>,
-    private readonly dataSource: DataSource,
+    private readonly creacion: CreacionReservaService,
     private readonly suscripcionesService: SuscripcionesService,
     private readonly reservaCorreos: ReservaCorreosService,
     private readonly abonos: AbonosService,
@@ -250,7 +222,7 @@ export class ReservarService {
     }
 
     const { servicio, sucursal, horaInicio, horaFin } =
-      await this.validarReferencias(dto);
+      await this.creacion.validarReferencias(dto);
 
     // SPEC 06: antes del control de solape, para que una retención vencida no bloquee la hora.
     await this.abonos.anularVencidos(dto.sucursalId);
@@ -268,57 +240,40 @@ export class ReservarService {
       );
     }
 
-    let saved: Reserva;
-    let pago: Pago | null;
-    try {
-      // SERIALIZABLE: dos reservas simultáneas no pueden pasar ambas el control de solape.
-      ({ saved, pago } = await this.dataSource.transaction(
-        'SERIALIZABLE',
-        async (manager) => {
-          if (dto.empleadoId) {
-            await this.validarHoraLibre(manager, dto, horaInicio, horaFin);
-          }
-          const cliente = await this.obtenerCliente(manager, dto);
-          const estado = await manager.findOne(Estado, {
-            where: {
-              tipo: 'Reserva',
-              nombre: cobro ? 'Pendiente' : 'Programada',
-            },
-          });
+    // SPEC 08: transacción SERIALIZABLE con control de solape, compartida con el panel.
+    const { saved, pago } = await this.creacion.crearConHoraLibre(
+      { empleadoId: dto.empleadoId, fecha: dto.fecha, horaInicio, horaFin },
+      async (manager) => {
+        const cliente = await this.creacion.obtenerCliente(manager, dto);
+        const estado = await manager.findOne(Estado, {
+          where: {
+            tipo: 'Reserva',
+            nombre: cobro ? 'Pendiente' : 'Programada',
+          },
+        });
 
-          const reserva = await manager.save(
-            manager.create(Reserva, {
-              codigo: uuidv4(),
-              fecha: dto.fecha,
-              horaInicio,
-              horaFin,
-              precio: servicio.precio,
-              observacion: dto.observacion,
-              empresa: { id: dto.empresaId },
-              sucursal: { id: dto.sucursalId },
-              cliente,
-              servicio: { id: dto.servicioId },
-              empleado: dto.empleadoId ? { id: dto.empleadoId } : undefined,
-              estado: estado ?? undefined,
-            }),
-          );
-          const pendiente = cobro
-            ? await this.abonos.registrarPendiente(manager, reserva.id, cobro)
-            : null;
-          return { saved: reserva, pago: pendiente };
-        },
-      ));
-    } catch (error) {
-      if (
-        error instanceof QueryFailedError &&
-        (error.driverError as { number?: number })?.number === MSSQL_DEADLOCK
-      ) {
-        throw new ConflictException(
-          'La hora seleccionada ya no está disponible',
+        const reserva = await manager.save(
+          manager.create(Reserva, {
+            codigo: uuidv4(),
+            fecha: dto.fecha,
+            horaInicio,
+            horaFin,
+            precio: servicio.precio,
+            observacion: dto.observacion,
+            empresa: { id: dto.empresaId },
+            sucursal: { id: dto.sucursalId },
+            cliente,
+            servicio: { id: dto.servicioId },
+            empleado: dto.empleadoId ? { id: dto.empleadoId } : undefined,
+            estado: estado ?? undefined,
+          }),
         );
-      }
-      throw error;
-    }
+        const pendiente: Pago | null = cobro
+          ? await this.abonos.registrarPendiente(manager, reserva.id, cobro)
+          : null;
+        return { saved: reserva, pago: pendiente };
+      },
+    );
 
     const pagoIniciado = await this.iniciarPago(
       pago,
@@ -365,124 +320,5 @@ export class ReservarService {
       email: dto.clienteEmail,
       subject: subject.slice(0, 200),
     });
-  }
-
-  /** Comprueba que empresa, sucursal, servicio y empleado existan, estén activos y se correspondan. */
-  private async validarReferencias(dto: CreateReservaDto) {
-    const invalida = () =>
-      new BadRequestException('Los datos de la reserva no son válidos');
-
-    const sucursal = await this.sucursalRepo.findOne({
-      where: { id: dto.sucursalId },
-      relations: { empresa: true },
-    });
-    if (!sucursal?.activo || sucursal.empresa?.id !== dto.empresaId) {
-      throw invalida();
-    }
-
-    const servicio = await this.servicioRepo.findOne({
-      where: { id: dto.servicioId },
-      relations: { empresa: true },
-    });
-    if (!servicio?.activo || servicio.empresa?.id !== dto.empresaId) {
-      throw invalida();
-    }
-
-    if (dto.empleadoId) {
-      const empleado = await this.empleadoRepo.findOne({
-        where: { id: dto.empleadoId },
-        relations: { sucursal: true },
-      });
-      if (!empleado?.activo || empleado.sucursal?.id !== dto.sucursalId) {
-        throw invalida();
-      }
-      const ofreceServicio = await this.servicioEmpleadoRepo.findOne({
-        where: {
-          empleado: { id: dto.empleadoId },
-          servicio: { id: dto.servicioId },
-        },
-      });
-      if (!ofreceServicio) {
-        throw invalida();
-      }
-    }
-
-    const inicio = aMinutos(dto.horaInicio);
-    const fin = inicio + servicio.duracionMinutos;
-    if (fin > 24 * 60) {
-      throw invalida();
-    }
-
-    await this.validarHorarioDeAtencion(dto, inicio, fin);
-
-    return {
-      servicio,
-      sucursal,
-      horaInicio: aHora(inicio),
-      horaFin: aHora(fin),
-    };
-  }
-
-  /** La reserva completa debe caber en un horario abierto de la sucursal para ese día. */
-  private async validarHorarioDeAtencion(
-    dto: CreateReservaDto,
-    inicio: number,
-    fin: number,
-  ): Promise<void> {
-    const horarios = await this.horarioRepo.find({
-      where: {
-        sucursal: { id: dto.sucursalId },
-        diaSemana: diaDeLaSemana(dto.fecha),
-        abierto: true,
-      },
-    });
-    const dentroDelHorario = horarios.some(
-      (h) => aMinutos(h.horaInicio) <= inicio && fin <= aMinutos(h.horaFin),
-    );
-    if (!dentroDelHorario) {
-      throw new BadRequestException(
-        'La hora seleccionada está fuera del horario de atención',
-      );
-    }
-  }
-
-  private async validarHoraLibre(
-    manager: EntityManager,
-    dto: CreateReservaDto,
-    horaInicio: string,
-    horaFin: string,
-  ): Promise<void> {
-    const ocupada = await horaOcupada(manager, {
-      empleadoId: dto.empleadoId!,
-      fecha: dto.fecha,
-      horaInicio,
-      horaFin,
-    });
-    if (ocupada) {
-      throw new ConflictException('La hora seleccionada ya no está disponible');
-    }
-  }
-
-  /** Los clientes son de cada empresa: el mismo email en otra empresa es otro cliente. */
-  private async obtenerCliente(
-    manager: EntityManager,
-    dto: CreateReservaDto,
-  ): Promise<Cliente> {
-    if (dto.clienteEmail) {
-      const existente = await manager.findOne(Cliente, {
-        where: { email: dto.clienteEmail, empresa: { id: dto.empresaId } },
-      });
-      if (existente) {
-        return existente;
-      }
-    }
-    return manager.save(
-      manager.create(Cliente, {
-        nombre: dto.clienteNombre,
-        email: dto.clienteEmail ?? '',
-        telefono: dto.clienteTelefono,
-        empresa: { id: dto.empresaId },
-      }),
-    );
   }
 }

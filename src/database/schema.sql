@@ -246,7 +246,10 @@ CREATE TABLE dbo.Usuario (
     ResetVentanaInicio        DATETIME2    NULL,
     ResetEnviosVentana        INT          NOT NULL CONSTRAINT DF_Usuario_ResetEnvios DEFAULT 0,
     GoogleId                  NVARCHAR(255) NULL,
+    SucursalId                INT          NULL,  -- sucursal del recepcionista; NULL en el rol 1 (SPEC 08)
+    DesactivadoPorSuscripcion BIT          NOT NULL CONSTRAINT DF_Usuario_DesactivadoPorSuscripcion DEFAULT 0,
     CONSTRAINT FK_Usuario_Empresa FOREIGN KEY (EmpresaId) REFERENCES dbo.Empresa(Id),
+    CONSTRAINT FK_Usuario_Sucursal FOREIGN KEY (SucursalId) REFERENCES dbo.Sucursal(id),
     CONSTRAINT FK_Usuario_Rol     FOREIGN KEY (RolId)     REFERENCES dbo.Rol(id),
     CONSTRAINT FK_Usuario_Estado  FOREIGN KEY (EstadoId)  REFERENCES dbo.Estado(id)
 );
@@ -290,6 +293,10 @@ CREATE TABLE dbo.Reserva (
     ServicioId      INT            NULL,
     EstadoId        INT            NULL,
     TokenCancelacionHash NVARCHAR(64) NULL,  -- SHA-256 del enlace público de cancelación (SPEC 07)
+    Origen          NVARCHAR(10)   NOT NULL CONSTRAINT DF_Reserva_Origen DEFAULT N'Online',  -- 'Online' | 'Panel' (SPEC 08)
+    UsuarioCreadorId INT           NULL,     -- quién la agendó desde el panel (SPEC 08)
+    CONSTRAINT CK_Reserva_Origen CHECK (Origen IN (N'Online', N'Panel')),
+    CONSTRAINT FK_Reserva_UsuarioCreador FOREIGN KEY (UsuarioCreadorId) REFERENCES dbo.Usuario(id),
     CONSTRAINT FK_Reserva_Empresa  FOREIGN KEY (EmpresaId)  REFERENCES dbo.Empresa(Id),
     CONSTRAINT FK_Reserva_Sucursal FOREIGN KEY (SucursalId) REFERENCES dbo.Sucursal(id),
     CONSTRAINT FK_Reserva_Cliente  FOREIGN KEY (ClienteId)  REFERENCES dbo.Cliente(Id),
@@ -459,6 +466,16 @@ BEGIN
     SET IDENTITY_INSERT dbo.Rol ON;
     INSERT INTO dbo.Rol (id, Nombre, Descripcion, Activo)
     VALUES (1, N'Administrador', N'Dueño / administrador de la empresa', 1);
+    SET IDENTITY_INSERT dbo.Rol OFF;
+END
+GO
+
+-- Rol 2: recepcionista invitado por el dueño (SPEC 08).
+IF NOT EXISTS (SELECT 1 FROM dbo.Rol WHERE id = 2)
+BEGIN
+    SET IDENTITY_INSERT dbo.Rol ON;
+    INSERT INTO dbo.Rol (id, Nombre, Descripcion, Activo)
+    VALUES (2, N'Recepcionista', N'Agenda y pagos manuales de una sucursal', 1);
     SET IDENTITY_INSERT dbo.Rol OFF;
 END
 GO

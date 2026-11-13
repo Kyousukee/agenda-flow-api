@@ -17,6 +17,9 @@ import { ReembolsarPagoDto } from './dto/reembolsar-pago.dto';
 import { ReembolsosService } from './reembolsos.service';
 import type { ReembolsoSolicitado } from './reembolsos.service';
 import { ReservaCorreosService } from '../correos/reserva-correos.service';
+import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import { validarAlcanceSucursal } from '../auth/alcance-sucursal';
+import { ROL_RECEPCIONISTA } from '../auth/roles';
 
 /** SPEC 07: estados de reserva sobre los que `cancelarReserva` no hace nada. */
 const RESERVA_YA_TERMINADA = ['Cancelada', 'Anulado'];
@@ -74,7 +77,7 @@ export class PagosService {
     return estado;
   }
 
-  async create(dto: CreatePagoDto, empresaId: number) {
+  async create(dto: CreatePagoDto, user: JwtPayload) {
     const reserva = await this.reservaRepo.findOne({
       where: { id: dto.reservaId },
       relations: { sucursal: { empresa: true } },
@@ -82,11 +85,13 @@ export class PagosService {
     if (!reserva) {
       throw new NotFoundException('Reserva no encontrada');
     }
-    if (reserva.sucursal?.empresa?.id !== empresaId) {
+    if (reserva.sucursal?.empresa?.id !== user.empresaId) {
       throw new ForbiddenException(
         'No tienes permiso para registrar pagos en esta reserva',
       );
     }
+    // SPEC 08: el recepcionista solo registra pagos de su sucursal.
+    validarAlcanceSucursal(user, reserva.sucursal);
 
     const estado = dto.estadoId
       ? await this.obtenerEstadoDePago(dto.estadoId)
@@ -107,13 +112,21 @@ export class PagosService {
   async actualizarEstado(
     id: number,
     dto: UpdatePagoEstadoDto,
-    empresaId: number,
+    user: JwtPayload,
   ) {
     const pago = await this.pagoDeEmpresa(
       id,
-      empresaId,
+      user.empresaId,
       'No tienes permiso para modificar este pago',
     );
+    // SPEC 08: el recepcionista solo toca pagos manuales de su sucursal. Los de Flow
+    // mueven dinero de la cuenta del local y son del dueño.
+    validarAlcanceSucursal(user, pago.reserva.sucursal);
+    if (user.rolId === ROL_RECEPCIONISTA && pago.cuentaFlowId) {
+      throw new ForbiddenException(
+        'Los pagos con Flow solo los puede modificar el administrador',
+      );
+    }
 
     const estado = await this.obtenerEstadoDePago(dto.estadoId);
     // SPEC 07: en los pagos Flow, Reembolsado lo calcula el back a partir de los reembolsos.
@@ -221,7 +234,7 @@ export class PagosService {
     return pago;
   }
 
-  async findAllBySucursal(sucursalId: number, empresaId: number) {
+  async findAllBySucursal(sucursalId: number, user: JwtPayload) {
     const sucursal = await this.sucursalRepo.findOne({
       where: { id: sucursalId },
       relations: { empresa: true },
@@ -229,11 +242,13 @@ export class PagosService {
     if (!sucursal) {
       throw new NotFoundException('Sucursal no encontrada');
     }
-    if (sucursal.empresa.id !== empresaId) {
+    if (sucursal.empresa.id !== user.empresaId) {
       throw new ForbiddenException(
         'No tienes permiso para ver los pagos de esta sucursal',
       );
     }
+    // SPEC 08: el recepcionista solo ve (y exporta) los pagos de su sucursal.
+    validarAlcanceSucursal(user, sucursal);
 
     const pagos = await this.pagoRepo
       .createQueryBuilder('pago')

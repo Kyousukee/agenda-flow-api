@@ -10,6 +10,7 @@ import {
 import { Empresa } from '../../empresas/entities/empresa.entity';
 import { Rol } from '../../rol/entities/rol.entity';
 import { Estado } from '../../reservas/entities/estado.entity';
+import { Sucursal } from '../../sucursales/entities/sucursal.entity';
 
 @Entity('Usuario')
 export class Usuario {
@@ -129,4 +130,13 @@ export class Usuario {
   @ManyToOne(() => Estado)
   @JoinColumn({ name: 'EstadoId' })
   estado: Estado;
+
+  /** SPEC 08: sucursal del recepcionista. NULL en el rol 1. */
+  @ManyToOne(() => Sucursal, { nullable: true })
+  @JoinColumn({ name: 'SucursalId' })
+  sucursal?: Sucursal | null;
+
+  /** SPEC 08: recepcionista desactivado por el excedente del plan Gratis (SPEC 01). */
+  @Column({ type: 'bit', default: false, name: 'DesactivadoPorSuscripcion' })
+  desactivadoPorSuscripcion: boolean;
 }

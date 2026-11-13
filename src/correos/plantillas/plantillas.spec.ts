@@ -20,6 +20,7 @@ import { verificarEmail } from './verificar-email';
 import { restablecerContrasena } from './restablecer-contrasena';
 import { cancelacionCliente } from './cancelacion-cliente';
 import { reembolsoRechazadoInterno } from './reembolso-rechazado-interno';
+import { invitacionEquipo } from './invitacion-equipo';
 
 const marca: MarcaEmpresa = {
   nombre: 'Barbería Central',
@@ -242,6 +243,48 @@ describe('correos de cuenta', () => {
         expect(contenido).not.toContain('a través de AgendaFlow');
       }
     });
+  });
+});
+
+describe('invitacionEquipo (SPEC 08)', () => {
+  const datos = {
+    nombre: 'Rocío',
+    enlace: 'https://agendaflow.cl/invitacion?token=abc123&x=1',
+    empresa: 'Barbería Central',
+    sucursal: 'Casa Matriz',
+    invitadoPor: 'José',
+  };
+
+  it('usa el asunto con quien invita y el negocio', () => {
+    expect(invitacionEquipo(datos).subject).toBe(
+      'José te invitó a Barbería Central en AgendaFlow',
+    );
+  });
+
+  it('incluye el negocio, la sucursal, el botón y el enlace en HTML y texto', () => {
+    const { html, text } = invitacionEquipo(datos);
+    expect(html).toContain('Crear mi contraseña');
+    expect(html).toContain(`href="${escapeHtml(datos.enlace)}"`);
+    expect(text).toContain(datos.enlace);
+    for (const contenido of [html, text]) {
+      expect(contenido).toContain('Barbería Central — Casa Matriz');
+      expect(contenido).toContain('7 días');
+      expect(contenido).toContain('Si no esperabas esta invitación');
+      expect(contenido).toContain('Este correo fue enviado por AgendaFlow.');
+    }
+  });
+
+  it('escapa los datos dinámicos en el HTML', () => {
+    const { html } = invitacionEquipo({
+      ...datos,
+      nombre: '<b>x</b>',
+      empresa: '<script>alert(1)</script>',
+      invitadoPor: '<i>y</i>',
+    });
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<b>x</b>');
+    expect(html).not.toContain('<i>y</i>');
+    expect(html).toContain('&lt;script&gt;');
   });
 });
 

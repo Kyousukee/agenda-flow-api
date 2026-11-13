@@ -55,4 +55,17 @@ describe('CuentaCorreosService', () => {
     expect(correo().fromName).toBe('AgendaFlow');
     expect(correo().replyTo).toBeUndefined();
   });
+
+  it('SPEC 08: arma el enlace de invitación con FRONT_URL', async () => {
+    const { servicio, correo } = crear('https://agendaflow.cl');
+    await servicio.enviarInvitacion(destinatario, 'tok123', {
+      empresa: 'Barbería',
+      sucursal: 'Centro',
+      invitadoPor: 'José',
+    });
+    expect(correo().to).toBe('ana@correo.cl');
+    expect(correo().text).toContain(
+      'https://agendaflow.cl/invitacion?token=tok123',
+    );
+  });
 });

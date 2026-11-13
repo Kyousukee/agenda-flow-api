@@ -342,4 +342,137 @@ describe('AuthService', () => {
       expect(usuarioGuardado()).toBeUndefined();
     });
   });
+
+  /** SPEC 08: sesión del recepcionista (rol 2). */
+  describe('recepcionista', () => {
+    const recepcionista = (extra: Partial<Usuario> = {}) =>
+      ({
+        id: 20,
+        nombre: 'Rocío',
+        email: 'rocio@example.com',
+        passwordHash: 'hash',
+        activo: true,
+        emailVerificado: true,
+        tokenVersion: 1,
+        rol: { id: 2 },
+        empresa: { id: 1 },
+        sucursal: { id: 10, nombre: 'Centro' },
+        ...extra,
+      }) as unknown as Usuario;
+
+    /** AuthService con un empleado de OTRA sucursal que comparte el email. */
+    function conEmpleado(usuario: Usuario | null) {
+      const sign = jest.fn<string, [Record<string, unknown>]>(() => 'jwt');
+      const usuarioFindOne = jest.fn(() => Promise.resolve(usuario));
+      const usuarioUpdate = jest.fn(() => Promise.resolve({ affected: 1 }));
+      const servicio = new AuthService(
+        {
+          findOne: usuarioFindOne,
+          update: usuarioUpdate,
+        } as unknown as Repository<Usuario>,
+        {
+          findOne: jest.fn(() =>
+            Promise.resolve({
+              id: 5,
+              email: 'rocio@example.com',
+              sucursal: { id: 99, empresa: { id: 1 } },
+            }),
+          ),
+        } as unknown as Repository<Empleado>,
+        {} as DataSource,
+        { sign } as unknown as JwtService,
+        {} as CuentaCorreosService,
+        {
+          verificar: jest.fn(() =>
+            Promise.resolve({ ...perfilGoogle, email: 'rocio@example.com' }),
+          ),
+        } as unknown as GoogleAuthService,
+      );
+      return { servicio, sign, usuarioFindOne, usuarioUpdate };
+    }
+
+    it('sesionDe firma el JWT con la sucursal asignada, no la del empleado con su email', async () => {
+      const { servicio, sign, usuarioFindOne } = conEmpleado(recepcionista());
+
+      const respuesta = await servicio.sesionDe(20);
+
+      expect(usuarioFindOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 20 },
+          relations: { rol: true, empresa: true, sucursal: true },
+        }),
+      );
+      expect(sign.mock.calls[0][0]).toMatchObject({
+        sub: 20,
+        rolId: 2,
+        empresaId: 1,
+        sucursalId: 10,
+        tokenVersion: 1,
+      });
+      expect(respuesta.user).toMatchObject({
+        rolId: 2,
+        sucursal: { id: 10, nombre: 'Centro' },
+      });
+    });
+
+    it('sin sucursal asignada el JWT no trae sucursalId (no accede a ninguna)', async () => {
+      const { servicio, sign } = conEmpleado(recepcionista({ sucursal: null }));
+      await servicio.sesionDe(20);
+      expect(sign.mock.calls[0][0].sucursalId).toBeUndefined();
+    });
+
+    it('el dueño sigue tomando la sucursal del empleado y no recibe `sucursal`', async () => {
+      const { servicio, sign } = conEmpleado(
+        recepcionista({ rol: { id: 1 } as never, sucursal: null }),
+      );
+      const respuesta = await servicio.sesionDe(20);
+      expect(sign.mock.calls[0][0].sucursalId).toBe(99);
+      expect(respuesta.user).not.toHaveProperty('sucursal');
+    });
+
+    it('sesionDe rechaza un usuario desactivado', async () => {
+      const { servicio } = conEmpleado(recepcionista({ activo: false }));
+      await expect(servicio.sesionDe(20)).rejects.toThrow('Cuenta desactivada');
+    });
+
+    it('login con contraseña trae la sucursal del recepcionista', async () => {
+      const { servicio, sign } = conEmpleado(
+        recepcionista({ passwordHash: await bcrypt.hash('secreto123', 4) }),
+      );
+      await servicio.login({
+        email: 'rocio@example.com',
+        password: 'secreto123',
+      });
+      expect(sign.mock.calls[0][0]).toMatchObject({ sucursalId: 10 });
+    });
+
+    it('Google con la invitación pendiente → 401 y no vincula la cuenta', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate, sign } =
+        conEmpleado(null);
+      usuarioFindOne
+        .mockResolvedValueOnce(null) // por googleId
+        .mockResolvedValueOnce(
+          recepcionista({ passwordHash: null, emailVerificado: false }),
+        );
+
+      await expect(servicio.loginGoogle('credential')).rejects.toThrow(
+        'Acepta la invitación que llegó a tu correo antes de entrar con Google',
+      );
+      expect(usuarioUpdate).not.toHaveBeenCalled();
+      expect(sign).not.toHaveBeenCalled();
+    });
+
+    it('Google después de aceptar la invitación vincula y entra con su sucursal', async () => {
+      const { servicio, usuarioFindOne, usuarioUpdate, sign } =
+        conEmpleado(null);
+      usuarioFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(recepcionista());
+
+      await servicio.loginGoogle('credential');
+
+      expect(usuarioUpdate).toHaveBeenCalled();
+      expect(sign.mock.calls[0][0]).toMatchObject({ rolId: 2, sucursalId: 10 });
+    });
+  });
 });
